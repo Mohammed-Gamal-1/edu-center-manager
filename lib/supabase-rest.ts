@@ -51,3 +51,39 @@ export async function supabaseInsert<T>(table: string, payload: unknown): Promis
   if (!response.ok) throw new Error(`Supabase insert failed (${response.status})`);
   return response.json() as Promise<T[]>;
 }
+
+export async function supabaseUpsert<T>(table: string, payload: unknown, onConflict = "id"): Promise<T[]> {
+  const current = config();
+  if (!current) throw new Error("Supabase is not configured");
+  const url = new URL(`${current.url}/rest/v1/${table}`);
+  url.searchParams.set("on_conflict", onConflict);
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      ...requestHeaders(current.key),
+      "Content-Type": "application/json",
+      Prefer: "resolution=merge-duplicates,return=representation",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) throw new Error(`Supabase upsert failed (${response.status})`);
+  return response.json() as Promise<T[]>;
+}
+
+export async function supabaseUpdate<T>(table: string, filters: Record<string, QueryValue>, payload: unknown): Promise<T[]> {
+  const current = config();
+  if (!current) throw new Error("Supabase is not configured");
+  const url = new URL(`${current.url}/rest/v1/${table}`);
+  Object.entries(filters).forEach(([key, value]) => url.searchParams.set(key, String(value)));
+  const response = await fetch(url, {
+    method: "PATCH",
+    headers: {
+      ...requestHeaders(current.key),
+      "Content-Type": "application/json",
+      Prefer: "return=representation",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) throw new Error(`Supabase update failed (${response.status})`);
+  return response.json() as Promise<T[]>;
+}

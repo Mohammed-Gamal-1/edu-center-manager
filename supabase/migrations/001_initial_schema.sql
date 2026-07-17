@@ -192,6 +192,16 @@ create table public.audit_log (
   created_at timestamptz not null default now()
 );
 
+-- Single-admin operational snapshot. The normalized tables above remain the
+-- durable domain model, while this document makes every current workflow
+-- persist atomically and enables safe offline retry from the browser.
+create table public.center_state (
+  id smallint primary key default 1 check (id = 1),
+  data jsonb not null,
+  version bigint not null default 1 check (version >= 0),
+  updated_at timestamptz not null default now()
+);
+
 create index audit_log_created_idx on public.audit_log(created_at desc);
 create index audit_log_entity_idx on public.audit_log(entity_type, entity_id);
 
@@ -210,6 +220,8 @@ for each row execute function public.touch_updated_at();
 create trigger lesson_sessions_touch_updated_at before update on public.lesson_sessions
 for each row execute function public.touch_updated_at();
 create trigger admin_accounts_touch_updated_at before update on public.admin_accounts
+for each row execute function public.touch_updated_at();
+create trigger center_state_touch_updated_at before update on public.center_state
 for each row execute function public.touch_updated_at();
 
 create or replace view public.session_financial_summary as
@@ -239,6 +251,7 @@ alter table public.lesson_sessions enable row level security;
 alter table public.session_attendance enable row level security;
 alter table public.center_expenses enable row level security;
 alter table public.audit_log enable row level security;
+alter table public.center_state enable row level security;
 
 insert into public.rooms (name) values ('قاعة 1'), ('قاعة 2'), ('قاعة 3'), ('قاعة 4'), ('قاعة 5')
 on conflict (name) do nothing;
