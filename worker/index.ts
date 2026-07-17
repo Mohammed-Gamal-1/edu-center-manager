@@ -3,6 +3,10 @@ import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } fr
 import handler from "vinext/server/app-router-entry";
 
 interface Env {
+  SUPABASE_URL?: string;
+  SUPABASE_SERVICE_ROLE_KEY?: string;
+  SUPABASE_PUBLISHABLE_KEY?: string;
+  SESSION_SECRET?: string;
   ASSETS: {
     fetch(input: Request): Promise<Response>;
   };
@@ -28,6 +32,7 @@ interface ExecutionContext {
 
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    (globalThis as typeof globalThis & { __CENTER_RUNTIME_ENV?: Env }).__CENTER_RUNTIME_ENV = env;
     const url = new URL(request.url);
 
     if (url.pathname === "/_vinext/image") {

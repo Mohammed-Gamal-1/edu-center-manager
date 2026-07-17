@@ -3,10 +3,17 @@ import "server-only";
 type QueryValue = string | number | boolean;
 
 function config() {
-  const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const runtimeEnv = (globalThis as typeof globalThis & { __CENTER_RUNTIME_ENV?: Record<string, string | undefined> }).__CENTER_RUNTIME_ENV;
+  const url = runtimeEnv?.SUPABASE_URL ?? process.env.SUPABASE_URL;
+  const key = runtimeEnv?.SUPABASE_SERVICE_ROLE_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) return null;
   return { url: url.replace(/\/$/, ""), key };
+}
+
+function requestHeaders(key: string) {
+  const headers: Record<string, string> = { apikey: key };
+  if (!key.startsWith("sb_secret_")) headers.Authorization = `Bearer ${key}`;
+  return headers;
 }
 
 export function isSupabaseConfigured() {
@@ -20,8 +27,7 @@ export async function supabaseQuery<T>(table: string, query: Record<string, Quer
   Object.entries(query).forEach(([key, value]) => url.searchParams.set(key, String(value)));
   const response = await fetch(url, {
     headers: {
-      apikey: current.key,
-      Authorization: `Bearer ${current.key}`,
+      ...requestHeaders(current.key),
       Accept: "application/json",
     },
     cache: "no-store",
@@ -36,8 +42,7 @@ export async function supabaseInsert<T>(table: string, payload: unknown): Promis
   const response = await fetch(`${current.url}/rest/v1/${table}`, {
     method: "POST",
     headers: {
-      apikey: current.key,
-      Authorization: `Bearer ${current.key}`,
+      ...requestHeaders(current.key),
       "Content-Type": "application/json",
       Prefer: "return=representation",
     },
