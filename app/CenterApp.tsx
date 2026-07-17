@@ -319,7 +319,7 @@ export default function CenterApp() {
         </header>
 
         <div className="page-content">
-          {view === "dashboard" && <Dashboard sessions={sessions} teachers={teachers} onOpenSession={setSelectedSession} />}
+          {view === "dashboard" && <Dashboard sessions={sessions} teachers={teachers} onOpenSession={setSelectedSession} onViewAllSessions={() => navigate("sessions")} />}
           {view === "students" && <StudentsPage tab={studentTab} setTab={setStudentTab} students={students} setStudents={setStudents} teachers={teachers} bookings={bookings} setBookings={setBookings} sessions={sessions} onOpenStudent={setSelectedStudent} audit={setAudit} showToast={showToast} />}
           {view === "teachers" && <TeachersPage teachers={teachers} setTeachers={setTeachers} sessions={sessions} onOpenTeacher={setSelectedTeacher} audit={setAudit} subjectCatalog={subjectCatalog} setSubjectCatalog={setSubjectCatalog} showToast={showToast} />}
           {view === "sessions" && <SessionsPage sessions={sessions} teachers={teachers} onCreate={() => setCreateSessionOpen(true)} onOpen={setSelectedSession} />}
@@ -343,7 +343,7 @@ export default function CenterApp() {
   );
 }
 
-function Dashboard({ sessions, teachers, onOpenSession }: { sessions: LessonSession[]; teachers: Teacher[]; onOpenSession: (lesson: LessonSession) => void }) {
+function Dashboard({ sessions, teachers, onOpenSession, onViewAllSessions }: { sessions: LessonSession[]; teachers: Teacher[]; onOpenSession: (lesson: LessonSession) => void; onViewAllSessions: () => void }) {
   const [todaySessionsOpen, setTodaySessionsOpen] = useState(false);
   const today = todayIso();
   const todaySessions = sessions.filter((lesson) => lesson.date === today).slice().sort((a, b) => a.scheduledTime.localeCompare(b.scheduledTime));
@@ -356,7 +356,7 @@ function Dashboard({ sessions, teachers, onOpenSession }: { sessions: LessonSess
     <button type="button" className="metric-card teal metric-button" onClick={() => setTodaySessionsOpen(true)} aria-label={`فتح حصص اليوم وعددها ${todaySessions.length}`}><div className="metric-icon"><CalendarDays size={23} /></div><div><span>حصص اليوم</span><strong>{todaySessions.length}</strong><small><Activity size={14} /> {active.length} شغالة الآن · اضغط للتفاصيل</small></div><span className="metric-watermark">{String(todaySessions.length).padStart(2, "0")}</span><span className="metric-open"><ChevronLeft size={18} /></span></button>
     <section className="metric-card navy"><div className="metric-icon"><Users size={23} /></div><div><span>حضور الطلاب اليوم</span><strong>{attendance}</strong><small><Activity size={14} /> كل حضور محسوب على حدة</small></div><span className="metric-watermark">{attendance}</span></section>
     <section className="panel active-lessons">
-      <div className="panel-head"><div><span className="section-kicker live"><i /> مباشر الآن</span><h2>الحصص الشغالة</h2></div><button className="text-btn">عرض كل الحصص <ChevronLeft size={17} /></button></div>
+      <div className="panel-head"><div><span className="section-kicker live"><i /> مباشر الآن</span><h2>الحصص الشغالة</h2></div><button type="button" className="text-btn" onClick={onViewAllSessions}>عرض كل الحصص <ChevronLeft size={17} /></button></div>
       {active.length ? <div className="table-wrap"><table><thead><tr><th>المدرس</th><th>المرحلة والصف والمادة</th><th>القاعة</th><th>الطلاب</th><th>بدأت</th><th /></tr></thead><tbody>{active.map((lesson) => <tr key={lesson.id} onClick={() => onOpenSession(lesson)}><td><div className="person-cell"><span>{teacherName(lesson.teacherId).replace("أ/ ", "").charAt(0)}</span><strong>{teacherName(lesson.teacherId)}</strong></div></td><td><strong>{lesson.subject}</strong><small>{lesson.stage} · {lesson.grade}</small></td><td><span className="room-tag">{lesson.room}</span></td><td><div className="student-count"><Users size={16} /><strong>{lesson.studentIds.length}</strong></div></td><td><span className="time-cell"><Clock3 size={15} /> {lesson.startedAt}</span></td><td><button className="row-action"><ChevronLeft size={18} /></button></td></tr>)}</tbody></table></div> : <EmptyState icon={<Clock3 />} title="لا توجد حصص شغالة" text="الحصص التي تبدأ ستظهر هنا فوراً" />}
     </section>
     <section className="panel chart-panel">
