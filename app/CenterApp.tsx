@@ -225,6 +225,8 @@ export default function CenterApp() {
   const [view, setView] = useState<View>("dashboard");
   const [mobileNav, setMobileNav] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [notificationsSeen, setNotificationsSeen] = useState(false);
   const [studentTab, setStudentTab] = useState<StudentTab>("records");
   const [adminTab, setAdminTab] = useState<AdminTab>("analytics");
   const [students, setStudents] = useState(initialStudents);
@@ -247,6 +249,7 @@ export default function CenterApp() {
 
   const showToast = (message: string) => {
     setToast(message);
+    setNotificationsSeen(false);
     window.setTimeout(() => setToast(""), 2600);
   };
 
@@ -256,6 +259,7 @@ export default function CenterApp() {
     setView(target);
     setMobileNav(false);
     setProfileMenuOpen(false);
+    setNotificationsOpen(false);
   };
 
   const handleLogin = (event: FormEvent<HTMLFormElement>) => {
@@ -306,6 +310,8 @@ export default function CenterApp() {
     admin: ["الإدارة والتقارير", "الأسعار، الأرشيف، التحليلات وإعدادات النظام"],
   };
   const openSessionsToday = sessions.filter((lesson) => lesson.date === todayIso() && lesson.status !== "ended").length;
+  const notificationSessions = sessions.filter((lesson) => lesson.status === "active" || lesson.status === "postponed");
+  const notificationCount = notificationSessions.length + Math.min(audit.length, 3);
 
   return (
     <div className="app-shell" dir="rtl">
@@ -330,7 +336,7 @@ export default function CenterApp() {
         <header className="topbar">
           <button className="mobile-menu icon-btn" onClick={() => setMobileNav(true)} aria-label="فتح القائمة"><Menu size={22} /></button>
           <div className="page-heading"><h1>{pageTitles[view][0]}</h1><p>{pageTitles[view][1]}</p></div>
-          <div className="top-actions"><div className="today-chip"><CalendarDays size={17} /><span>{arabicDate()}</span></div><button className="icon-btn notification" aria-label="التنبيهات"><Bell size={20} /><i /></button></div>
+          <div className="top-actions"><div className="today-chip"><CalendarDays size={17} /><span>{arabicDate()}</span></div><div className="notification-wrap"><button className="icon-btn notification" onClick={() => { setNotificationsOpen((open) => !open); setNotificationsSeen(true); }} aria-label={`التنبيهات: ${notificationCount}`} aria-expanded={notificationsOpen}><Bell size={20} />{!notificationsSeen && notificationCount > 0 && <i />}</button>{notificationsOpen && <div className="notification-popover"><div className="notification-head"><div><strong>الإشعارات</strong><span>{notificationCount} تحديث</span></div><button type="button" onClick={() => setNotificationsOpen(false)} aria-label="إغلاق الإشعارات"><X size={16} /></button></div><div className="notification-list">{notificationSessions.map((lesson) => <button type="button" key={lesson.id} onClick={() => { setNotificationsOpen(false); setSelectedSession(lesson); }}><span className={lesson.status}><Clock3 size={16} /></span><div><strong>{lesson.status === "active" ? "حصة شغالة الآن" : "حصة مؤجلة"}</strong><small>{lesson.subject} · {teacherName(lesson.teacherId)} · {lesson.room}</small></div><ChevronLeft size={16} /></button>)}{audit.slice(0, 3).map((entry) => <button type="button" key={entry.id} onClick={() => { setNotificationsOpen(false); setView("admin"); setAdminTab("audit"); }}><span className={entry.tone}><History size={16} /></span><div><strong>{entry.action}</strong><small>{entry.details}</small></div><ChevronLeft size={16} /></button>)}{!notificationCount && <div className="notification-empty"><Bell size={20} /><span>لا توجد إشعارات جديدة</span></div>}</div><button type="button" className="notification-footer" onClick={() => { setNotificationsOpen(false); setView("admin"); setAdminTab("audit"); }}>عرض سجل العمليات بالكامل <ChevronLeft size={16} /></button></div>}</div></div>
         </header>
 
         <div className="page-content">
