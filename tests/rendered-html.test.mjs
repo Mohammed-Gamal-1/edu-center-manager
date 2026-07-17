@@ -37,13 +37,14 @@ test("server-renders the secure Arabic application shell", async () => {
 });
 
 test("keeps cloud persistence, offline recovery, and admin auth protections in place", async () => {
-  const [centerApp, stateRoute, serverAuth, supabaseRest, migration, safetyMigration] = await Promise.all([
+  const [centerApp, stateRoute, serverAuth, supabaseRest, migration, safetyMigration, authMigration] = await Promise.all([
     readFile(new URL("../app/CenterApp.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/state/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/server-auth.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/supabase-rest.ts", import.meta.url), "utf8"),
     readFile(new URL("../supabase/migrations/001_initial_schema.sql", import.meta.url), "utf8"),
     readFile(new URL("../supabase/migrations/002_state_safety.sql", import.meta.url), "utf8"),
+    readFile(new URL("../supabase/migrations/003_database_auth.sql", import.meta.url), "utf8"),
   ]);
 
   assert.match(centerApp, /eltafawoq\.pending-state\.v1/);
@@ -52,7 +53,7 @@ test("keeps cloud persistence, offline recovery, and admin auth protections in p
   assert.match(stateRoute, /baseVersion/);
   assert.match(stateRoute, /status:\s*409/);
   assert.match(stateRoute, /version:\s*`eq\.\$\{currentVersion\}`/);
-  assert.match(serverAuth, /PBKDF2/);
+  assert.match(serverAuth, /verify_admin_credentials/);
   assert.match(serverAuth, /HttpOnly; Secure; SameSite=Strict/);
   assert.match(supabaseRest, /SUPABASE_SERVICE_ROLE_KEY/);
   assert.doesNotMatch(supabaseRest, /NEXT_PUBLIC_SUPABASE_SERVICE_ROLE_KEY/);
@@ -62,4 +63,9 @@ test("keeps cloud persistence, offline recovery, and admin auth protections in p
   assert.match(safetyMigration, /create table if not exists public\.center_state_history/i);
   assert.match(safetyMigration, /before update on public\.center_state/i);
   assert.doesNotMatch(safetyMigration, /\b(drop|truncate|delete)\b/i);
+  assert.match(authMigration, /extensions\.crypt\(p_password, account\.password_hash\)/i);
+  assert.match(authMigration, /grant execute.+service_role/is);
+  assert.match(authMigration, /recover_admin_password/i);
+  assert.match(authMigration, /recovery_hash\s*=\s*null/i);
+  assert.doesNotMatch(authMigration, /\b(drop|truncate|delete)\b/i);
 });

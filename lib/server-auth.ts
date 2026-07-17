@@ -1,19 +1,14 @@
 import "server-only";
 
-import { supabaseInsert, supabaseQuery, supabaseUpdate } from "./supabase-rest";
+import { supabaseRpc } from "./supabase-rest";
 
 const encoder = new TextEncoder();
-const PASSWORD_ITERATIONS = 310_000;
 const SESSION_MAX_AGE_SECONDS = 60 * 60 * 12;
 export const SESSION_COOKIE = "center_session";
 
 type AdminAccount = {
   id: string;
   username: string;
-  password_hash: string;
-  password_salt: string;
-  password_iterations: number;
-  active: boolean;
 };
 
 export type AdminSession = {
@@ -25,15 +20,6 @@ export type AdminSession = {
 function runtimeValue(key: "SESSION_SECRET") {
   const runtimeEnv = (globalThis as typeof globalThis & { __CENTER_RUNTIME_ENV?: Record<string, string | undefined> }).__CENTER_RUNTIME_ENV;
   return runtimeEnv?.[key] ?? process.env[key];
-}
-
-function bytesToHex(bytes: Uint8Array) {
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-function hexToBytes(hex: string) {
-  if (!/^[0-9a-f]+$/i.test(hex) || hex.length % 2) throw new Error("Invalid password salt");
-  return new Uint8Array(hex.match(/.{2}/g)?.map((value) => Number.parseInt(value, 16)) ?? []);
 }
 
 function base64UrlEncode(value: string | Uint8Array) {
@@ -50,50 +36,12 @@ function base64UrlDecode(value: string) {
   return new Uint8Array(Array.from(binary, (character) => character.charCodeAt(0)));
 }
 
-async function derivePasswordHash(password: string, saltHex: string, iterations: number) {
-  const material = await crypto.subtle.importKey("raw", encoder.encode(password), "PBKDF2", false, ["deriveBits"]);
-  const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: hexToBytes(saltHex), iterations }, material, 256);
-  return bytesToHex(new Uint8Array(bits));
-}
-
-function constantTimeEqual(left: string, right: string) {
-  if (left.length !== right.length) return false;
-  let result = 0;
-  for (let index = 0; index < left.length; index += 1) result |= left.charCodeAt(index) ^ right.charCodeAt(index);
-  return result === 0;
-}
-
-export async function createPasswordRecord(password: string) {
-  const salt = crypto.getRandomValues(new Uint8Array(24));
-  const passwordSalt = bytesToHex(salt);
-  return {
-    password_hash: await derivePasswordHash(password, passwordSalt, PASSWORD_ITERATIONS),
-    password_salt: passwordSalt,
-    password_iterations: PASSWORD_ITERATIONS,
-  };
-}
-
 export async function authenticateAdmin(username: string, password: string) {
-  let accounts = await supabaseQuery<AdminAccount>("admin_accounts", {
-    select: "id,username,password_hash,password_salt,password_iterations,active",
-    username: `eq.${username}`,
-    limit: 1,
-  });
-
-  // First-run bootstrap. The default is accepted only while the table has no account.
-  if (!accounts.length) {
-    const existing = await supabaseQuery<AdminAccount>("admin_accounts", { select: "id", limit: 1 });
-    if (!existing.length && username === "admin" && password === "12345678") {
-      const passwordRecord = await createPasswordRecord(password);
-      accounts = await supabaseInsert<AdminAccount>("admin_accounts", { username, ...passwordRecord, active: true });
-    }
+  let accounts = await supabaseRpc<AdminAccount>("verify_admin_credentials", { p_username: username, p_password: password });
+  if (!accounts.length && username === "admin" && password === "12345678") {
+    accounts = await supabaseRpc<AdminAccount>("bootstrap_admin_account", { p_username: username, p_password: password });
   }
-
-  const account = accounts[0];
-  if (!account?.active) return null;
-  const candidate = await derivePasswordHash(password, account.password_salt, account.password_iterations);
-  if (!constantTimeEqual(candidate, account.password_hash)) return null;
-  return { id: account.id, username: account.username };
+  return accounts[0] ? { id: accounts[0].id, username: accounts[0].username } : null;
 }
 
 async function sessionKey() {
@@ -150,8 +98,10 @@ export function clearSessionCookie() {
 }
 
 export async function updateAdminCredentials(adminId: string, username: string, newPassword?: string) {
-  const payload: Record<string, string | number> = { username };
-  if (newPassword) Object.assign(payload, await createPasswordRecord(newPassword));
-  const updated = await supabaseUpdate<AdminAccount>("admin_accounts", { id: `eq.${adminId}` }, payload);
+  const updated = await supabaseRpc<AdminAccount>("update_admin_credentials", {
+    p_admin_id: adminId,
+    p_username: username,
+    p_new_password: newPassword || null,
+  });
   return updated[0] ? { id: updated[0].id, username: updated[0].username } : null;
 }

@@ -87,3 +87,19 @@ export async function supabaseUpdate<T>(table: string, filters: Record<string, Q
   if (!response.ok) throw new Error(`Supabase update failed (${response.status})`);
   return response.json() as Promise<T[]>;
 }
+
+export async function supabaseRpc<T>(functionName: string, payload: unknown): Promise<T[]> {
+  const current = config();
+  if (!current) throw new Error("Supabase is not configured");
+  const response = await fetch(`${current.url}/rest/v1/rpc/${functionName}`, {
+    method: "POST",
+    headers: {
+      ...requestHeaders(current.key),
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) throw new Error(`Supabase RPC failed (${response.status})`);
+  return response.json() as Promise<T[]>;
+}

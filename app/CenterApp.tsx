@@ -209,6 +209,7 @@ export default function CenterApp() {
   const [loginLoading, setLoginLoading] = useState(false);
   const [currentUsername, setCurrentUsername] = useState("admin");
   const [loginError, setLoginError] = useState("");
+  const [recoveryMode, setRecoveryMode] = useState(false);
   const [view, setView] = useState<View>("dashboard");
   const [mobileNav, setMobileNav] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
@@ -410,6 +411,26 @@ export default function CenterApp() {
     }
   };
 
+  const handlePasswordRecovery = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    setLoginLoading(true);
+    setLoginError("");
+    try {
+      const response = await fetch("/api/auth/recover", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: data.get("username"), recoveryCode: data.get("recoveryCode"), password: data.get("password") }) });
+      const result = await response.json() as { ok?: boolean; error?: string; username?: string };
+      if (!response.ok || !result.ok) throw new Error(result.error || "تعذر استرداد الحساب");
+      setAuthenticated(true);
+      setDataReady(false);
+      setRecoveryMode(false);
+      if (result.username) setCurrentUsername(result.username);
+    } catch (error) {
+      setLoginError(error instanceof Error ? error.message : "تعذر استرداد الحساب");
+    } finally {
+      setLoginLoading(false);
+    }
+  };
+
   const handleLogout = async () => {
     try { await fetch("/api/auth/logout", { method: "POST" }); } catch { /* Local sign-out still completes. */ }
     setAuthenticated(false);
@@ -435,16 +456,11 @@ export default function CenterApp() {
             <span><Activity size={19} /> متابعة لحظية</span>
           </div>
         </section>
-        <form className="login-card" onSubmit={handleLogin}>
+        <section className="login-card">
           <div className="login-card-icon"><LockKeyhole size={24} /></div>
-          <h2>أهلاً برجوعك</h2>
-          <p>سجّل دخولك لفتح لوحة إدارة السنتر</p>
-          <label>اسم المستخدم<input name="username" autoComplete="username" required /></label>
-          <label>كلمة المرور<input name="password" type="password" autoComplete="current-password" minLength={8} required /></label>
-          {loginError && <div className="form-error">{loginError}</div>}
-          <button className="primary-btn login-btn" type="submit" disabled={loginLoading}>{loginLoading ? <><LoaderCircle className="spin" size={18} /> جاري الدخول…</> : <>دخول للنظام <ChevronLeft size={18} /></>}</button>
+          {!recoveryMode ? <form onSubmit={handleLogin}><h2>أهلاً برجوعك</h2><p>سجّل دخولك لفتح لوحة إدارة السنتر</p><label>اسم المستخدم<input name="username" autoComplete="username" required /></label><label>كلمة المرور<input name="password" type="password" autoComplete="current-password" minLength={8} required /></label>{loginError && <div className="form-error">{loginError}</div>}<button className="primary-btn login-btn" type="submit" disabled={loginLoading}>{loginLoading ? <><LoaderCircle className="spin" size={18} /> جاري الدخول…</> : <>دخول للنظام <ChevronLeft size={18} /></>}</button><button type="button" className="forgot-password" onClick={() => { setLoginError(""); setRecoveryMode(true); }}>نسيت كلمة المرور؟</button></form> : <form onSubmit={handlePasswordRecovery}><h2>استرداد الحساب</h2><p>استخدم كود الطوارئ الذي حفظته من الإعدادات</p><label>اسم المستخدم<input name="username" autoComplete="username" defaultValue={currentUsername} required /></label><label>كود الاسترداد<input name="recoveryCode" autoComplete="off" placeholder="XXXX-XXXX-XXXX-XXXX-XXXX" required /></label><label>كلمة المرور الجديدة<input name="password" type="password" autoComplete="new-password" minLength={8} required /></label>{loginError && <div className="form-error">{loginError}</div>}<button className="primary-btn login-btn" type="submit" disabled={loginLoading}>{loginLoading ? <><LoaderCircle className="spin" size={18} /> جاري الاسترداد…</> : <>تعيين كلمة المرور والدخول <ChevronLeft size={18} /></>}</button><button type="button" className="forgot-password" onClick={() => { setLoginError(""); setRecoveryMode(false); }}>العودة لتسجيل الدخول</button></form>}
           <small>اتصال مشفّر وجلسة إدارة محمية</small>
-        </form>
+        </section>
       </main>
     );
   }
@@ -833,6 +849,8 @@ function AuditPanel({ audit }: { audit: AuditEntry[] }) {
 function SettingsPanel({ subjectCatalog, setSubjectCatalog, rooms, currentUsername, onCredentialsChanged, onAddRoom, onRenameRoom, showToast }: { subjectCatalog: Record<Stage, string[]>; setSubjectCatalog: React.Dispatch<React.SetStateAction<Record<Stage, string[]>>>; rooms: string[]; currentUsername: string; onCredentialsChanged: (username: string) => void; onAddRoom: (room: string) => void; onRenameRoom: (index: number, room: string) => void; showToast: (message: string) => void }) {
   const [username, setUsername] = useState(currentUsername);
   const [credentialsSaving, setCredentialsSaving] = useState(false);
+  const [recoveryCode, setRecoveryCode] = useState("");
+  const [recoveryCodeLoading, setRecoveryCodeLoading] = useState(false);
   const [subjectStage, setSubjectStage] = useState<Stage>("المرحلة الإعدادية");
   const [newSubject, setNewSubject] = useState("");
   const [roomEditor, setRoomEditor] = useState<{ index: number | null; value: string } | null>(null);
@@ -866,5 +884,19 @@ function SettingsPanel({ subjectCatalog, setSubjectCatalog, rooms, currentUserna
       setCredentialsSaving(false);
     }
   };
-  return <div className="settings-stack"><section className="panel settings-section"><div className="settings-icon"><LockKeyhole size={21} /></div><div className="settings-copy"><h3>بيانات الدخول</h3><p>تغيير اسم المستخدم أو كلمة المرور للإدارة</p></div><form onSubmit={saveCredentials}><label className="field">اسم المستخدم<input value={username} minLength={3} onChange={(event) => setUsername(event.target.value)} required /></label><label className="field">كلمة المرور الجديدة<input name="newPassword" type="password" minLength={8} placeholder="اتركها فارغة بدون تغيير" /></label><button className="primary-btn" type="submit" disabled={credentialsSaving}>{credentialsSaving ? "جاري الحفظ…" : "حفظ التغييرات"}</button></form></section><section className="panel settings-section"><div className="settings-icon rooms"><BookOpen size={21} /></div><div className="settings-copy"><h3>قاعات السنتر</h3><p>القاعات المتاحة عند إنشاء الحصة</p></div><div className="room-manager"><div className="room-settings">{rooms.map((room, index) => <button type="button" className="room-pill" key={`${room}-${index}`} onClick={() => setRoomEditor({ index, value: room })} aria-label={`تعديل اسم ${room}`}><i /><span>{room}</span><Edit3 size={15} /></button>)}<button type="button" className="add-room-btn" onClick={() => setRoomEditor({ index: null, value: "" })}><Plus size={16} /> إضافة قاعة</button></div>{roomEditor && <form className="room-editor-form" onSubmit={saveRoom}><label className="field">{roomEditor.index === null ? "اسم القاعة الجديدة" : "تعديل اسم القاعة"}<input autoFocus value={roomEditor.value} onChange={(event) => setRoomEditor({ ...roomEditor, value: event.target.value })} placeholder="مثال: القاعة الكبرى" /></label><div><button type="button" className="secondary-btn" onClick={() => setRoomEditor(null)}>إلغاء</button><button type="submit" className="primary-btn">{roomEditor.index === null ? "إضافة القاعة" : "حفظ الاسم"}</button></div></form>}</div></section><section className="panel settings-section subjects-section"><div className="settings-icon subjects"><BookOpen size={21} /></div><div className="settings-copy"><h3>مواد كل مرحلة</h3><p>المواد هنا تظهر تلقائياً عند إضافة مدرس أو تحديد سعر جديد</p></div><div className="subject-settings"><label className="field">المرحلة<select value={subjectStage} onChange={(event) => setSubjectStage(event.target.value as Stage)}>{stages.map((stage) => <option key={stage}>{stage}</option>)}</select></label><div className="subject-tags">{subjectCatalog[subjectStage].map((subject) => <span key={subject}>{subject}</span>)}</div><form onSubmit={(event) => { event.preventDefault(); const value = newSubject.trim(); if (!value) return; if (subjectCatalog[subjectStage].includes(value)) { showToast("المادة موجودة بالفعل في هذه المرحلة"); return; } setSubjectCatalog((current) => ({ ...current, [subjectStage]: [...current[subjectStage], value] })); setNewSubject(""); showToast("تمت إضافة المادة للمرحلة"); }}><label className="field">مادة جديدة<input value={newSubject} onChange={(event) => setNewSubject(event.target.value)} placeholder="اكتب اسم المادة" /></label><button className="primary-btn" type="submit"><Plus size={17} /> إضافة المادة</button></form></div></section><section className="cloud-card"><ShieldCheck size={26} /><div><h3>قاعدة البيانات السحابية</h3><p>كل تغيير يُحفظ أولاً على الجهاز كنسخة انتظار ثم يُزامن تلقائياً مع Supabase PostgreSQL.</p></div><span>حفظ مزدوج آمن</span></section></div>;
+  const generateRecoveryCode = async () => {
+    setRecoveryCodeLoading(true);
+    try {
+      const response = await fetch("/api/auth/recovery-code", { method: "POST" });
+      const result = await response.json() as { ok?: boolean; recoveryCode?: string; error?: string };
+      if (!response.ok || !result.ok || !result.recoveryCode) throw new Error(result.error || "تعذر إنشاء كود الاسترداد");
+      setRecoveryCode(result.recoveryCode);
+      showToast("تم إنشاء كود استرداد جديد");
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "تعذر إنشاء كود الاسترداد");
+    } finally {
+      setRecoveryCodeLoading(false);
+    }
+  };
+  return <div className="settings-stack"><section className="panel settings-section"><div className="settings-icon"><LockKeyhole size={21} /></div><div className="settings-copy"><h3>بيانات الدخول</h3><p>تغيير اسم المستخدم أو كلمة المرور للإدارة</p></div><form onSubmit={saveCredentials}><label className="field">اسم المستخدم<input value={username} minLength={3} onChange={(event) => setUsername(event.target.value)} required /></label><label className="field">كلمة المرور الجديدة<input name="newPassword" type="password" minLength={8} placeholder="اتركها فارغة بدون تغيير" /></label><button className="primary-btn" type="submit" disabled={credentialsSaving}>{credentialsSaving ? "جاري الحفظ…" : "حفظ التغييرات"}</button></form></section><section className="panel settings-section recovery-settings"><div className="settings-icon recovery"><ShieldCheck size={21} /></div><div className="settings-copy"><h3>استرداد كلمة المرور</h3><p>أنشئ كود طوارئ واحفظه خارج الجهاز. كل كود جديد يلغي الكود السابق، وبعد استخدامه يُلغى تلقائيًا.</p></div><div className="recovery-actions">{recoveryCode ? <div className="recovery-code-display"><span>احفظ هذا الكود الآن — لن يظهر مرة أخرى</span><code>{recoveryCode}</code><button type="button" className="secondary-btn" onClick={async () => { await navigator.clipboard.writeText(recoveryCode); showToast("تم نسخ كود الاسترداد"); }}>نسخ الكود</button></div> : <button type="button" className="primary-btn" onClick={generateRecoveryCode} disabled={recoveryCodeLoading}>{recoveryCodeLoading ? "جاري الإنشاء…" : "إنشاء كود استرداد"}</button>}</div></section><section className="panel settings-section"><div className="settings-icon rooms"><BookOpen size={21} /></div><div className="settings-copy"><h3>قاعات السنتر</h3><p>القاعات المتاحة عند إنشاء الحصة</p></div><div className="room-manager"><div className="room-settings">{rooms.map((room, index) => <button type="button" className="room-pill" key={`${room}-${index}`} onClick={() => setRoomEditor({ index, value: room })} aria-label={`تعديل اسم ${room}`}><i /><span>{room}</span><Edit3 size={15} /></button>)}<button type="button" className="add-room-btn" onClick={() => setRoomEditor({ index: null, value: "" })}><Plus size={16} /> إضافة قاعة</button></div>{roomEditor && <form className="room-editor-form" onSubmit={saveRoom}><label className="field">{roomEditor.index === null ? "اسم القاعة الجديدة" : "تعديل اسم القاعة"}<input autoFocus value={roomEditor.value} onChange={(event) => setRoomEditor({ ...roomEditor, value: event.target.value })} placeholder="مثال: القاعة الكبرى" /></label><div><button type="button" className="secondary-btn" onClick={() => setRoomEditor(null)}>إلغاء</button><button type="submit" className="primary-btn">{roomEditor.index === null ? "إضافة القاعة" : "حفظ الاسم"}</button></div></form>}</div></section><section className="panel settings-section subjects-section"><div className="settings-icon subjects"><BookOpen size={21} /></div><div className="settings-copy"><h3>مواد كل مرحلة</h3><p>المواد هنا تظهر تلقائياً عند إضافة مدرس أو تحديد سعر جديد</p></div><div className="subject-settings"><label className="field">المرحلة<select value={subjectStage} onChange={(event) => setSubjectStage(event.target.value as Stage)}>{stages.map((stage) => <option key={stage}>{stage}</option>)}</select></label><div className="subject-tags">{subjectCatalog[subjectStage].map((subject) => <span key={subject}>{subject}</span>)}</div><form onSubmit={(event) => { event.preventDefault(); const value = newSubject.trim(); if (!value) return; if (subjectCatalog[subjectStage].includes(value)) { showToast("المادة موجودة بالفعل في هذه المرحلة"); return; } setSubjectCatalog((current) => ({ ...current, [subjectStage]: [...current[subjectStage], value] })); setNewSubject(""); showToast("تمت إضافة المادة للمرحلة"); }}><label className="field">مادة جديدة<input value={newSubject} onChange={(event) => setNewSubject(event.target.value)} placeholder="اكتب اسم المادة" /></label><button className="primary-btn" type="submit"><Plus size={17} /> إضافة المادة</button></form></div></section><section className="cloud-card"><ShieldCheck size={26} /><div><h3>قاعدة البيانات السحابية</h3><p>كل تغيير يُحفظ أولاً على الجهاز كنسخة انتظار ثم يُزامن تلقائياً مع Supabase PostgreSQL.</p></div><span>حفظ مزدوج آمن</span></section></div>;
 }
