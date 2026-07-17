@@ -110,6 +110,7 @@ create table public.advance_bookings (
   teacher_id bigint not null references public.teachers(id),
   grade_id uuid not null references public.grades(id),
   subject_id uuid not null references public.subjects(id),
+  booking_fee numeric(12,2) not null default 0 check (booking_fee >= 0),
   active boolean not null default true,
   archived_at timestamptz,
   created_at timestamptz not null default now(),
