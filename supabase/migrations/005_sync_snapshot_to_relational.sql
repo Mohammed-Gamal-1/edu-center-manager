@@ -28,6 +28,9 @@ begin
   from jsonb_each(coalesce(snapshot -> 'subjectCatalog', '{}'::jsonb)) as catalog
   on conflict (name) do update set active = true, sort_order = excluded.sort_order;
 
+  -- Keep the catalog authoritative without deleting subjects referenced by
+  -- historical sessions.
+  update public.subjects set active = false where true;
   insert into public.subjects (stage_id, name, active)
   select stage_row.id, subject_name.value, true
   from jsonb_each(coalesce(snapshot -> 'subjectCatalog', '{}'::jsonb)) as catalog

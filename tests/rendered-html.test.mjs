@@ -88,6 +88,7 @@ test("keeps cloud persistence, offline recovery, and admin auth protections in p
   assert.match(relationalSyncMigration, /insert into public\.advance_bookings/i);
   assert.match(relationalSyncMigration, /insert into public\.center_expenses/i);
   assert.match(relationalSyncMigration, /update public\.rooms set active = false where true/i);
+  assert.match(relationalSyncMigration, /update public\.subjects set active = false where true/i);
   assert.match(relationalSyncMigration, /delete from public\.teacher_assignments where true/i);
   assert.match(relationalSyncMigration, /delete from public\.session_attendance where true/i);
 });
