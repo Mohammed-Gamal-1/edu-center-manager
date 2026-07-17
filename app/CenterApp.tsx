@@ -344,15 +344,16 @@ export default function CenterApp() {
 }
 
 function Dashboard({ sessions, teachers, onOpenSession }: { sessions: LessonSession[]; teachers: Teacher[]; onOpenSession: (lesson: LessonSession) => void }) {
+  const [todaySessionsOpen, setTodaySessionsOpen] = useState(false);
   const today = todayIso();
-  const todaySessions = sessions.filter((lesson) => lesson.date === today);
+  const todaySessions = sessions.filter((lesson) => lesson.date === today).slice().sort((a, b) => a.scheduledTime.localeCompare(b.scheduledTime));
   const active = todaySessions.filter((lesson) => lesson.status === "active");
   const ended = todaySessions.filter((lesson) => lesson.status === "ended").slice(0, 3);
   const attendance = todaySessions.reduce((total, lesson) => total + lesson.studentIds.length, 0);
   const teacherName = (id: string) => teachers.find((teacher) => teacher.id === id)?.name ?? "—";
   const maxStudents = Math.max(...todaySessions.map((lesson) => lesson.studentIds.length), 1);
   return <div className="dashboard-grid">
-    <section className="metric-card teal"><div className="metric-icon"><CalendarDays size={23} /></div><div><span>حصص اليوم</span><strong>{todaySessions.length}</strong><small><TrendingUp size={14} /> حصتان شغالتان الآن</small></div><span className="metric-watermark">{String(todaySessions.length).padStart(2, "0")}</span></section>
+    <button type="button" className="metric-card teal metric-button" onClick={() => setTodaySessionsOpen(true)} aria-label={`فتح حصص اليوم وعددها ${todaySessions.length}`}><div className="metric-icon"><CalendarDays size={23} /></div><div><span>حصص اليوم</span><strong>{todaySessions.length}</strong><small><Activity size={14} /> {active.length} شغالة الآن · اضغط للتفاصيل</small></div><span className="metric-watermark">{String(todaySessions.length).padStart(2, "0")}</span><span className="metric-open"><ChevronLeft size={18} /></span></button>
     <section className="metric-card navy"><div className="metric-icon"><Users size={23} /></div><div><span>حضور الطلاب اليوم</span><strong>{attendance}</strong><small><Activity size={14} /> كل حضور محسوب على حدة</small></div><span className="metric-watermark">{attendance}</span></section>
     <section className="panel active-lessons">
       <div className="panel-head"><div><span className="section-kicker live"><i /> مباشر الآن</span><h2>الحصص الشغالة</h2></div><button className="text-btn">عرض كل الحصص <ChevronLeft size={17} /></button></div>
@@ -366,6 +367,7 @@ function Dashboard({ sessions, teachers, onOpenSession }: { sessions: LessonSess
       <div className="panel-head"><div><span className="section-kicker">تمت اليوم</span><h2>آخر 3 حصص انتهت</h2></div></div>
       <div className="recent-list">{ended.map((lesson) => <button key={lesson.id} onClick={() => onOpenSession(lesson)}><span className="recent-icon"><Check size={18} /></span><span className="recent-main"><strong>{lesson.subject} — {gradeLabel(lesson.stage, lesson.grade)}</strong><small>{teacherName(lesson.teacherId)} · {lesson.room}</small></span><span className="recent-students"><b>{lesson.studentIds.length}</b><small>طالب</small></span><span className="recent-time">{lesson.endedAt}</span><ChevronLeft size={18} /></button>)}</div>
     </section>
+    {todaySessionsOpen && <Modal title="حصص اليوم" subtitle={`${arabicDate()} · ${todaySessions.length} حصة`} onClose={() => setTodaySessionsOpen(false)} wide><div className="modal-body today-session-list">{todaySessions.map((lesson) => <button key={lesson.id} onClick={() => { setTodaySessionsOpen(false); onOpenSession(lesson); }}><StatusPill status={lesson.status} /><div className="today-session-main"><strong>{lesson.subject} — {gradeLabel(lesson.stage, lesson.grade)}</strong><small>{teacherName(lesson.teacherId)} · {lesson.room}</small></div><span><Clock3 size={15} /> {lesson.startedAt ?? lesson.scheduledTime}</span><span><Users size={15} /> {lesson.studentIds.length} طلاب</span><ChevronLeft size={18} /></button>)}{!todaySessions.length && <EmptyState icon={<CalendarDays />} title="لا توجد حصص اليوم" text="الحصص التي يتم إنشاؤها بتاريخ اليوم ستظهر هنا" />}</div></Modal>}
   </div>;
 }
 
