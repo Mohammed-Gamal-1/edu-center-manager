@@ -237,9 +237,11 @@ export default function CenterApp() {
   const [toast, setToast] = useState("");
   const [dataReady, setDataReady] = useState(false);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>("loading");
+  const [cloudConflict, setCloudConflict] = useState<LocalSnapshot | null>(null);
   const [retrySync, setRetrySync] = useState(0);
   const versionRef = useRef(0);
   const saveTimerRef = useRef<number | null>(null);
+  const saveInFlightRef = useRef(false);
   const latestSnapshotRef = useRef<CenterSnapshot | null>(null);
   const skipNextPersistRef = useRef(false);
 
@@ -333,7 +335,13 @@ export default function CenterApp() {
       return;
     }
     queueMicrotask(() => setSyncStatus("saving"));
+    if (saveInFlightRef.current) {
+      saveTimerRef.current = window.setTimeout(() => setRetrySync((value) => value + 1), 180);
+      return () => { if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current); };
+    }
     saveTimerRef.current = window.setTimeout(async () => {
+      saveInFlightRef.current = true;
+      let retryDelay: number | null = null;
       try {
         const response = await fetch("/api/state", {
           method: "PUT",
@@ -345,8 +353,11 @@ export default function CenterApp() {
           setDataReady(false);
           return;
         }
-        const result = await response.json() as { ok?: boolean; version?: number; conflict?: boolean };
+        const result = await response.json() as { ok?: boolean; version?: number; conflict?: boolean; state?: CenterSnapshot };
         if (response.status === 409 || result.conflict) {
+          if (result.state && typeof result.version === "number") {
+            setCloudConflict({ state: result.state, baseVersion: result.version });
+          }
           setSyncStatus("conflict");
           return;
         }
@@ -357,10 +368,16 @@ export default function CenterApp() {
           localStorage.removeItem(LOCAL_PENDING_KEY);
           setSyncStatus("saved");
         } else {
-          setRetrySync((value) => value + 1);
+          retryDelay = 80;
         }
       } catch {
         setSyncStatus(navigator.onLine ? "error" : "offline");
+        if (navigator.onLine) retryDelay = 2000;
+      } finally {
+        saveInFlightRef.current = false;
+        if (retryDelay !== null) {
+          saveTimerRef.current = window.setTimeout(() => setRetrySync((value) => value + 1), retryDelay);
+        }
       }
     }, retrySync ? 80 : 650);
     return () => { if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current); };
@@ -381,6 +398,40 @@ export default function CenterApp() {
     setToast(message);
     setNotificationsSeen(false);
     window.setTimeout(() => setToast(""), 2600);
+  };
+
+  const keepLocalConflictCopy = () => {
+    if (!cloudConflict) return;
+    versionRef.current = cloudConflict.baseVersion;
+    const latest = latestSnapshotRef.current;
+    if (latest) {
+      localStorage.setItem(LOCAL_PENDING_KEY, JSON.stringify({ state: latest, baseVersion: cloudConflict.baseVersion } satisfies LocalSnapshot));
+    }
+    setCloudConflict(null);
+    setSyncStatus("saving");
+    setRetrySync((value) => value + 1);
+    showToast("سيتم حفظ نسخة هذا الجهاز على السحابة");
+  };
+
+  const useCloudConflictCopy = () => {
+    if (!cloudConflict) return;
+    skipNextPersistRef.current = true;
+    setStudents(cloudConflict.state.students);
+    setTeachers(cloudConflict.state.teachers);
+    setPricing(cloudConflict.state.pricing);
+    setSessions(cloudConflict.state.sessions);
+    setBookings(cloudConflict.state.bookings);
+    setExpenses(cloudConflict.state.expenses);
+    setAudit(cloudConflict.state.audit);
+    setSubjectCatalog(cloudConflict.state.subjectCatalog);
+    setRooms(cloudConflict.state.rooms);
+    versionRef.current = cloudConflict.baseVersion;
+    latestSnapshotRef.current = cloudConflict.state;
+    localStorage.setItem(LOCAL_CACHE_KEY, JSON.stringify(cloudConflict));
+    localStorage.removeItem(LOCAL_PENDING_KEY);
+    setCloudConflict(null);
+    setSyncStatus("saved");
+    showToast("تم اعتماد أحدث نسخة محفوظة على السحابة");
   };
 
   const teacherName = (id: string) => teachers.find((teacher) => teacher.id === id)?.name ?? "مدرس مؤرشف";
@@ -539,6 +590,7 @@ export default function CenterApp() {
 
       {endReview && selectedSession && (() => { const lesson = sessions.find((item) => item.id === selectedSession.id) ?? selectedSession; const gross = lesson.studentIds.length * lesson.studentPrice; const teacherDue = lesson.studentIds.length * lesson.teacherFee; return <Modal title="إنهاء الحصة" subtitle="مراجعة الحسابات النهائية قبل نقل الحصة للأرشيف" onClose={() => setEndReview(false)} wide><div className="modal-body"><div className="review-banner"><ShieldCheck size={24} /><div><strong>سيتم قفل بيانات الحصة بعد التأكيد</strong><span>أي تعديل لاحق سيتم تسجيله في سجل العمليات</span></div></div><div className="financial-grid"><div><span>الطلاب الحاضرون</span><strong>{lesson.studentIds.length}</strong></div><div><span>إجمالي قيمة الحصة</span><strong>{money(gross)}</strong></div><div><span>مستحق المدرس</span><strong>{money(teacherDue)}</strong></div><div className="highlight"><span>صافي السنتر</span><strong>{money(gross - teacherDue)}</strong></div></div></div><div className="modal-actions"><button className="secondary-btn" onClick={() => setEndReview(false)}>رجوع للحصة</button><button className="danger-confirm" onClick={() => { const end = new Date().toTimeString().slice(0, 5); setSessions((current) => current.map((item) => item.id === lesson.id ? { ...item, status: "ended", endedAt: end } : item)); setAudit((current) => [{ id: String(Date.now()), action: "إنهاء حصة", details: `تم إنهاء حصة ${lesson.subject} — صافي السنتر ${money(gross - teacherDue)}`, time: "الآن", tone: "green" }, ...current]); setEndReview(false); setSelectedSession(null); showToast("تم إنهاء الحصة ونقلها للأرشيف"); }}>تأكيد وإنهاء الحصة</button></div></Modal>; })()}
 
+      {cloudConflict && <div className="sync-conflict-banner" role="alertdialog" aria-modal="true" aria-labelledby="sync-conflict-title"><div><CloudOff size={23} /><span><strong id="sync-conflict-title">يوجد تعديل محفوظ من جهاز آخر</strong><small>نسخة هذا الجهاز ما زالت محفوظة بأمان. اختر النسخة التي تريد اعتمادها.</small></span></div><div><button type="button" className="secondary-btn" onClick={useCloudConflictCopy}>استخدام النسخة السحابية</button><button type="button" className="primary-btn" onClick={keepLocalConflictCopy}>حفظ نسخة هذا الجهاز</button></div></div>}
       {toast && <div className="toast"><Check size={18} />{toast}</div>}
     </div>
   );

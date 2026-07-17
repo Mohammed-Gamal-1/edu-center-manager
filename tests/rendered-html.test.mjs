@@ -50,6 +50,10 @@ test("keeps cloud persistence, offline recovery, and admin auth protections in p
   assert.match(centerApp, /eltafawoq\.pending-state\.v1/);
   assert.match(centerApp, /eltafawoq\.cloud-cache\.v1/);
   assert.match(centerApp, /addEventListener\("online"/);
+  assert.match(centerApp, /saveInFlightRef/);
+  assert.match(centerApp, /setCloudConflict/);
+  assert.match(centerApp, /استخدام النسخة السحابية/);
+  assert.match(centerApp, /حفظ نسخة هذا الجهاز/);
   assert.match(stateRoute, /baseVersion/);
   assert.match(stateRoute, /status:\s*409/);
   assert.match(stateRoute, /version:\s*`eq\.\$\{currentVersion\}`/);
