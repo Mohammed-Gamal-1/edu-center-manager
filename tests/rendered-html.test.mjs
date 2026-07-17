@@ -37,7 +37,7 @@ test("server-renders the secure Arabic application shell", async () => {
 });
 
 test("keeps cloud persistence, offline recovery, and admin auth protections in place", async () => {
-  const [centerApp, stateRoute, serverAuth, supabaseRest, migration, safetyMigration, authMigration] = await Promise.all([
+  const [centerApp, stateRoute, serverAuth, supabaseRest, migration, safetyMigration, authMigration, persistentRecoveryMigration] = await Promise.all([
     readFile(new URL("../app/CenterApp.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/state/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/server-auth.ts", import.meta.url), "utf8"),
@@ -45,6 +45,7 @@ test("keeps cloud persistence, offline recovery, and admin auth protections in p
     readFile(new URL("../supabase/migrations/001_initial_schema.sql", import.meta.url), "utf8"),
     readFile(new URL("../supabase/migrations/002_state_safety.sql", import.meta.url), "utf8"),
     readFile(new URL("../supabase/migrations/003_database_auth.sql", import.meta.url), "utf8"),
+    readFile(new URL("../supabase/migrations/004_persistent_recovery_code.sql", import.meta.url), "utf8"),
   ]);
 
   assert.match(centerApp, /eltafawoq\.pending-state\.v1/);
@@ -70,6 +71,9 @@ test("keeps cloud persistence, offline recovery, and admin auth protections in p
   assert.match(authMigration, /extensions\.crypt\(p_password, account\.password_hash\)/i);
   assert.match(authMigration, /grant execute.+service_role/is);
   assert.match(authMigration, /recover_admin_password/i);
-  assert.match(authMigration, /recovery_hash\s*=\s*null/i);
   assert.doesNotMatch(authMigration, /\b(drop|truncate|delete)\b/i);
+  assert.match(persistentRecoveryMigration, /recover_admin_password/i);
+  assert.match(persistentRecoveryMigration, /account\.recovery_hash\s*=\s*extensions\.crypt/i);
+  assert.doesNotMatch(persistentRecoveryMigration, /recovery_hash\s*=\s*null/i);
+  assert.doesNotMatch(persistentRecoveryMigration, /\b(drop|truncate|delete)\b/i);
 });
