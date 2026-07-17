@@ -166,6 +166,19 @@ create table public.session_attendance (
 
 create index session_attendance_student_idx on public.session_attendance(student_id, attended_at desc);
 
+create table public.center_expenses (
+  id bigint generated always as identity primary key,
+  category text not null check (category in ('إيجار', 'مرافق', 'أدوات ومستلزمات', 'صيانة', 'رواتب', 'أخرى')),
+  amount numeric(12,2) not null check (amount > 0),
+  expense_date date not null default current_date,
+  description text not null check (char_length(trim(description)) >= 2),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index center_expenses_date_idx on public.center_expenses(expense_date desc);
+create index center_expenses_category_idx on public.center_expenses(category);
+
 create table public.audit_log (
   id bigint generated always as identity primary key,
   admin_id uuid references public.admin_accounts(id),
@@ -224,6 +237,7 @@ alter table public.price_rules enable row level security;
 alter table public.advance_bookings enable row level security;
 alter table public.lesson_sessions enable row level security;
 alter table public.session_attendance enable row level security;
+alter table public.center_expenses enable row level security;
 alter table public.audit_log enable row level security;
 
 insert into public.rooms (name) values ('قاعة 1'), ('قاعة 2'), ('قاعة 3'), ('قاعة 4'), ('قاعة 5')
