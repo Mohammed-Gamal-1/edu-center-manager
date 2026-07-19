@@ -5,6 +5,7 @@ export type CenterStatePayload = {
   sessions: unknown[];
   bookings: unknown[];
   expenses: unknown[];
+  debtPayments?: unknown[];
   audit: unknown[];
   subjectCatalog: Record<string, unknown>;
   rooms: string[];
@@ -18,6 +19,7 @@ export const emptyCenterState: CenterStatePayload = {
   sessions: [],
   bookings: [],
   expenses: [],
+  debtPayments: [],
   audit: [],
   subjectCatalog: {
     "المرحلة الابتدائية": ["اللغة العربية", "اللغة الإنجليزية", "الرياضيات", "العلوم", "الدراسات الاجتماعية"],
@@ -33,6 +35,7 @@ export function isCenterStatePayload(value: unknown): value is CenterStatePayloa
   const payload = value as Record<string, unknown>;
   const arrayKeys = ["students", "teachers", "pricing", "sessions", "bookings", "expenses", "audit"];
   if (!arrayKeys.every((key) => Array.isArray(payload[key]))) return false;
+  if (payload.debtPayments !== undefined && !Array.isArray(payload.debtPayments)) return false;
   if (!Array.isArray(payload.rooms) || payload.rooms.length > 100 || !payload.rooms.every((room) => typeof room === "string" && room.trim().length > 0 && room.length <= 100)) return false;
   if (!payload.subjectCatalog || typeof payload.subjectCatalog !== "object" || Array.isArray(payload.subjectCatalog)) return false;
   if (typeof payload.savedAt !== "string" || Number.isNaN(Date.parse(payload.savedAt))) return false;

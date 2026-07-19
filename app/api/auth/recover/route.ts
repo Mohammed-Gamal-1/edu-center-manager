@@ -8,7 +8,7 @@ export async function POST(request: Request) {
   const username = typeof body?.username === "string" ? body.username.trim() : "";
   const recoveryCode = typeof body?.recoveryCode === "string" ? body.recoveryCode.trim().toUpperCase() : "";
   const password = typeof body?.password === "string" ? body.password : "";
-  if (username.length < 3 || recoveryCode.length < 16 || password.length < 8 || password.length > 256) {
+  if (username.length < 3 || recoveryCode.length < 16 || password.length < 4 || password.length > 256) {
     return Response.json({ ok: false, error: "بيانات الاسترداد غير صحيحة" }, { status: 400 });
   }
   try {

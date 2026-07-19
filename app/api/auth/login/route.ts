@@ -4,7 +4,7 @@ export async function POST(request: Request) {
   const body = await request.json().catch(() => null) as { username?: unknown; password?: unknown } | null;
   const username = typeof body?.username === "string" ? body.username.trim() : "";
   const password = typeof body?.password === "string" ? body.password : "";
-  if (!username || username.length > 80 || password.length < 8 || password.length > 256) {
+  if (!username || username.length > 80 || password.length < 4 || password.length > 256) {
     return Response.json({ ok: false, error: "بيانات الدخول غير صحيحة" }, { status: 401 });
   }
   let account;
