@@ -1,5 +1,6 @@
 export type FinancialSession = {
   id: string;
+  date?: string;
   status: string;
   studentIds: string[];
   studentPrice: number;
@@ -22,6 +23,11 @@ export type SessionFinancials = {
   collected: number;
   teacherDue: number;
   centerNet: number;
+};
+
+export type DebtPaymentAllocation = {
+  sessionId: string;
+  amount: number;
 };
 
 export function normalizePaidAmount(value: unknown, fullPrice: number) {
@@ -64,3 +70,30 @@ export function outstandingForStudent(sessions: FinancialSession[], payments: De
     .reduce((sum, session) => sum + outstandingForAttendance(session, studentId, payments), 0);
 }
 
+export function allocateDebtPayment(
+  sessions: FinancialSession[],
+  payments: DebtPaymentRecord[],
+  studentId: string,
+  amount: number,
+): DebtPaymentAllocation[] {
+  let remaining = Math.max(0, Number.isFinite(amount) ? amount : 0);
+  if (!remaining) return [];
+
+  const eligibleSessions = sessions
+    .map((session, index) => ({ session, index }))
+    .filter(({ session }) => session.status === "ended" && session.studentIds.includes(studentId))
+    .sort((left, right) => {
+      const dateOrder = (left.session.date ?? "").localeCompare(right.session.date ?? "");
+      return dateOrder || left.index - right.index;
+    });
+
+  const allocations: DebtPaymentAllocation[] = [];
+  for (const { session } of eligibleSessions) {
+    const outstanding = outstandingForAttendance(session, studentId, payments);
+    const applied = Math.min(outstanding, remaining);
+    if (applied > 0) allocations.push({ sessionId: session.id, amount: applied });
+    remaining -= applied;
+    if (remaining <= 0) break;
+  }
+  return allocations;
+}

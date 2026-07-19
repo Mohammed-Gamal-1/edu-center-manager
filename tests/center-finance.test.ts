@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  allocateDebtPayment,
   getSessionFinancials,
   outstandingForAttendance,
   outstandingForStudent,
@@ -41,3 +42,26 @@ test("active lessons do not become collectible old debt before ending", () => {
   assert.equal(outstandingForStudent([{ ...partialSession, status: "active" }], [], "100"), 0);
 });
 
+test("a combined payment clears old lesson debts from oldest to newest", () => {
+  const sessions = [
+    { ...partialSession, id: "12", date: "2026-07-18", studentPayments: { "100": 80, "101": 100 } },
+    { ...partialSession, id: "11", date: "2026-07-17" },
+  ];
+  const allocations = allocateDebtPayment(sessions, [], "100", 60);
+  assert.deepEqual(allocations, [
+    { sessionId: "11", amount: 40 },
+    { sessionId: "12", amount: 20 },
+  ]);
+  const payments = allocations.map((allocation, index) => ({
+    id: String(index + 1),
+    studentId: "100",
+    sessionId: allocation.sessionId,
+    amount: allocation.amount,
+    date: "2026-07-19",
+  }));
+  assert.equal(outstandingForStudent(sessions, payments, "100"), 0);
+});
+
+test("debt allocation never applies more than the student owes", () => {
+  assert.deepEqual(allocateDebtPayment([partialSession], [], "100", 100), [{ sessionId: "11", amount: 40 }]);
+});

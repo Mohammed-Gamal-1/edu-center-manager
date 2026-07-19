@@ -40,6 +40,7 @@ import {
 } from "lucide-react";
 import { FormEvent, ReactNode, useEffect, useRef, useState } from "react";
 import {
+  allocateDebtPayment,
   DebtPaymentRecord,
   getSessionFinancials,
   normalizePaidAmount,
@@ -598,7 +599,54 @@ export default function CenterApp() {
       {selectedStudent && <StudentRecordModal student={selectedStudent} sessions={sessions} teachers={teachers} debtPayments={debtPayments} onClose={() => setSelectedStudent(null)} />}
       {selectedTeacher && <TeacherRecordModal teacher={selectedTeacher} sessions={sessions} students={students} debtPayments={debtPayments} onClose={() => setSelectedTeacher(null)} />}
 
-      {selectedSession && <SessionModal session={sessions.find((item) => item.id === selectedSession.id) ?? selectedSession} allSessions={sessions} debtPayments={debtPayments} students={students} teacherName={teacherName(sessions.find((item) => item.id === selectedSession.id)?.teacherId ?? selectedSession.teacherId)} onClose={() => { setSelectedSession(null); setEndReview(false); setStartReview(false); setEditSessionOpen(false); }} onEdit={() => setEditSessionOpen(true)} onAddStudent={(studentId, paidAmount) => { setSessions((current) => current.map((item) => item.id === selectedSession.id && !item.studentIds.includes(studentId) ? { ...item, studentIds: [...item.studentIds, studentId], studentPayments: { ...(item.studentPayments ?? {}), [studentId]: normalizePaidAmount(paidAmount, item.studentPrice) } } : item)); showToast(paidAmount < selectedSession.studentPrice ? "تمت إضافة الطالب وتسجيل المبلغ المتبقي عليه" : "تمت إضافة الطالب للحصة كدفع كامل"); }} onRemoveStudent={(studentId) => { setSessions((current) => current.map((item) => { if (item.id !== selectedSession.id) return item; const studentPayments = { ...(item.studentPayments ?? {}) }; delete studentPayments[studentId]; return { ...item, studentIds: item.studentIds.filter((id) => id !== studentId), studentPayments }; })); }} onStart={() => { setStartTime(new Date().toTimeString().slice(0, 5)); setStartReview(true); }} onPostpone={() => { setSessions((current) => current.map((item) => item.id === selectedSession.id ? { ...item, status: "postponed" } : item)); setAudit((current) => [{ id: String(Date.now()), action: "تأجيل حصة", details: `تم تأجيل حصة ${selectedSession.subject} في ${selectedSession.room}`, time: "الآن", tone: "orange" }, ...current]); showToast("تم تأجيل الحصة ويمكن بدءها لاحقاً"); }} onEnd={() => setEndReview(true)} />}
+      {selectedSession && <SessionModal
+        session={sessions.find((item) => item.id === selectedSession.id) ?? selectedSession}
+        allSessions={sessions}
+        debtPayments={debtPayments}
+        students={students}
+        teacherName={teacherName(sessions.find((item) => item.id === selectedSession.id)?.teacherId ?? selectedSession.teacherId)}
+        onClose={() => { setSelectedSession(null); setEndReview(false); setStartReview(false); setEditSessionOpen(false); }}
+        onEdit={() => setEditSessionOpen(true)}
+        onAddStudent={(studentId, paidAmount, oldDebtPayment) => {
+          const student = students.find((item) => item.id === studentId);
+          const oldDebtBefore = outstandingForStudent(sessions, debtPayments, studentId);
+          const appliedOldDebt = Math.min(oldDebtBefore, Math.max(0, oldDebtPayment));
+          setSessions((current) => current.map((item) => item.id === selectedSession.id && !item.studentIds.includes(studentId) ? {
+            ...item,
+            studentIds: [...item.studentIds, studentId],
+            studentPayments: { ...(item.studentPayments ?? {}), [studentId]: normalizePaidAmount(paidAmount, item.studentPrice) },
+          } : item));
+          if (appliedOldDebt > 0) {
+            setDebtPayments((current) => {
+              const allocations = allocateDebtPayment(sessions, current, studentId, appliedOldDebt);
+              const nextId = Math.max(0, ...current.map((item) => Number(item.id)).filter(Number.isFinite)) + 1;
+              const created = allocations.map((allocation, index): DebtPayment => ({
+                id: String(nextId + index),
+                studentId,
+                sessionId: allocation.sessionId,
+                amount: allocation.amount,
+                date: todayIso(),
+                note: `سداد تلقائي عند تسجيل الحضور في حصة ${selectedSession.subject}`,
+              }));
+              return [...created, ...current];
+            });
+            setAudit((current) => [{
+              id: String(Date.now()),
+              action: "إضافة طالب وتحصيل مديونية",
+              details: `تمت إضافة ${student?.name ?? `الطالب ${studentId}`} إلى حصة ${selectedSession.subject} وتحصيل ${money(appliedOldDebt)} من مديونيته القديمة`,
+              time: "الآن",
+              tone: "green",
+            }, ...current]);
+          }
+          if (appliedOldDebt >= oldDebtBefore && oldDebtBefore > 0) showToast("تمت إضافة الطالب وسداد المديونية القديمة بالكامل");
+          else if (appliedOldDebt > 0) showToast(`تمت إضافة الطالب وخصم ${money(appliedOldDebt)} من مديونيته القديمة`);
+          else showToast(paidAmount < selectedSession.studentPrice ? "تمت إضافة الطالب وتسجيل المبلغ المتبقي عليه" : "تمت إضافة الطالب للحصة كدفع كامل");
+        }}
+        onRemoveStudent={(studentId) => { setSessions((current) => current.map((item) => { if (item.id !== selectedSession.id) return item; const studentPayments = { ...(item.studentPayments ?? {}) }; delete studentPayments[studentId]; return { ...item, studentIds: item.studentIds.filter((id) => id !== studentId), studentPayments }; })); }}
+        onStart={() => { setStartTime(new Date().toTimeString().slice(0, 5)); setStartReview(true); }}
+        onPostpone={() => { setSessions((current) => current.map((item) => item.id === selectedSession.id ? { ...item, status: "postponed" } : item)); setAudit((current) => [{ id: String(Date.now()), action: "تأجيل حصة", details: `تم تأجيل حصة ${selectedSession.subject} في ${selectedSession.room}`, time: "الآن", tone: "orange" }, ...current]); showToast("تم تأجيل الحصة ويمكن بدءها لاحقاً"); }}
+        onEnd={() => setEndReview(true)}
+      />}
 
       {editSessionOpen && selectedSession && <EditSessionModal session={sessions.find((item) => item.id === selectedSession.id) ?? selectedSession} teachers={teachers} pricing={pricing} sessions={sessions} rooms={rooms} onClose={() => setEditSessionOpen(false)} onSave={(updated) => { setSessions((current) => current.map((lesson) => lesson.id === updated.id ? updated : lesson)); setSelectedSession(updated); setAudit((current) => [{ id: String(Date.now()), action: "تعديل حصة", details: `تم تحديث حصة ${updated.subject} — ${updated.date} ${updated.scheduledTime}`, time: "الآن", tone: "blue" }, ...current]); setEditSessionOpen(false); showToast("تم حفظ تعديلات الحصة"); }} />}
 
@@ -754,13 +802,20 @@ function EditSessionModal({ session, teachers, pricing, sessions, rooms, onClose
   return <Modal title="تعديل بيانات الحصة" subtitle={`${session.id} · التغييرات تُسجل في سجل العمليات`} onClose={onClose} wide><form className="modal-body entity-form" onSubmit={submit}><label className="field full">المدرس<select value={teacherId} onChange={(event) => { setTeacherId(event.target.value); setAssignmentIndex(0); }}>{teachers.filter((item) => item.active || item.id === session.teacherId).map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label><label className="field full">المرحلة والصف والمادة<select value={assignmentIndex} onChange={(event) => setAssignmentIndex(Number(event.target.value))}>{teacher?.assignments.map((item, index) => <option key={`${item.stage}-${item.grade}-${item.subject}`} value={index}>{item.stage} — {item.grade} — {item.subject}</option>)}</select></label><label className="field">التاريخ<input type="date" value={date} onInput={(event) => setDate(event.currentTarget.value)} required /></label><label className="field">الساعة<input type="time" value={time} onInput={(event) => setTime(event.currentTarget.value)} required /></label><label className="field full">القاعة<select value={room} onChange={(event) => setRoom(event.target.value)}>{rooms.map((item) => <option key={item}>{item}</option>)}</select></label><div className="price-preview full"><div><span>سعر الطالب بعد التعديل</span><strong>{money(rule?.studentPrice ?? session.studentPrice)}</strong></div><div><span>أجر المدرس / طالب</span><strong>{money(rule?.teacherFee ?? session.teacherFee)}</strong></div></div>{conflictError && <div className="form-error full">{conflictError}</div>}<div className="modal-actions full"><button type="button" className="secondary-btn" onClick={onClose}>إلغاء</button><button className="primary-btn" type="submit">حفظ تعديلات الحصة</button></div></form></Modal>;
 }
 
-function SessionModal({ session, allSessions, debtPayments, students, teacherName, onClose, onEdit, onAddStudent, onRemoveStudent, onStart, onPostpone, onEnd }: { session: LessonSession; allSessions: LessonSession[]; debtPayments: DebtPayment[]; students: Student[]; teacherName: string; onClose: () => void; onEdit: () => void; onAddStudent: (id: string, paidAmount: number) => void; onRemoveStudent: (id: string) => void; onStart: () => void; onPostpone: () => void; onEnd: () => void }) {
+function SessionModal({ session, allSessions, debtPayments, students, teacherName, onClose, onEdit, onAddStudent, onRemoveStudent, onStart, onPostpone, onEnd }: { session: LessonSession; allSessions: LessonSession[]; debtPayments: DebtPayment[]; students: Student[]; teacherName: string; onClose: () => void; onEdit: () => void; onAddStudent: (id: string, paidAmount: number, oldDebtPayment: number) => void; onRemoveStudent: (id: string) => void; onStart: () => void; onPostpone: () => void; onEnd: () => void }) {
   const [query, setQuery] = useState("");
   const [pendingStudent, setPendingStudent] = useState<Student | null>(null);
   const [payFull, setPayFull] = useState(true);
   const [paidAmount, setPaidAmount] = useState(String(session.studentPrice));
   const candidates = students.filter((student) => student.active && !session.studentIds.includes(student.id) && query && [student.name, student.phone, student.id].some((value) => value.includes(query))).slice(0, 4);
   const financials = getSessionFinancials(session);
+  const pendingOldDebt = pendingStudent ? outstandingForStudent(allSessions, debtPayments, pendingStudent.id) : 0;
+  const combinedTotal = session.studentPrice + pendingOldDebt;
+  const enteredTotal = payFull ? session.studentPrice : Math.min(combinedTotal, Math.max(0, Number(paidAmount) || 0));
+  const currentLessonPaid = Math.min(session.studentPrice, enteredTotal);
+  const oldDebtPaid = Math.min(pendingOldDebt, Math.max(0, enteredTotal - session.studentPrice));
+  const currentLessonRemaining = Math.max(0, session.studentPrice - currentLessonPaid);
+  const oldDebtRemaining = Math.max(0, pendingOldDebt - oldDebtPaid);
   const openPayment = (student: Student) => {
     setPendingStudent(student);
     setPayFull(true);
@@ -768,12 +823,36 @@ function SessionModal({ session, allSessions, debtPayments, students, teacherNam
   };
   const confirmAttendance = () => {
     if (!pendingStudent) return;
-    const amount = payFull ? session.studentPrice : normalizePaidAmount(paidAmount, session.studentPrice);
-    onAddStudent(pendingStudent.id, amount);
+    onAddStudent(pendingStudent.id, currentLessonPaid, oldDebtPaid);
     setPendingStudent(null);
     setQuery("");
   };
-  return <><Modal title={`${session.subject} — ${gradeLabel(session.stage, session.grade)}`} subtitle={`${session.id} · ${session.room}`} onClose={onClose} wide><div className="session-modal-body"><div className="session-summary"><div><StatusPill status={session.status} /><h3>{teacherName}</h3><p><CalendarDays size={16} /> {session.date} <Clock3 size={16} /> {session.startedAt ?? session.scheduledTime}</p></div><div className="session-summary-actions">{session.status !== "ended" && <button className="secondary-btn" onClick={onEdit}><Edit3 size={17} /> تعديل</button>}{(session.status === "scheduled" || session.status === "postponed") && <button className="start-btn" onClick={onStart}><Activity size={18} /> {session.status === "postponed" ? "بدء الحصة مجدداً" : "بدء الحصة"}</button>}{session.status === "active" && <><button className="postpone-btn" onClick={onPostpone}><PauseCircle size={18} /> تأجيل الحصة</button><button className="end-btn" onClick={onEnd}><Check size={18} /> إنهاء الحصة</button></>}</div></div><div className="financial-grid session-financial-grid"><div><span>عدد الطلاب</span><strong>{session.studentIds.length}</strong></div><div><span>قيمة الحصة كاملة</span><strong>{money(financials.fullTotal)}</strong></div><div className={financials.shortages ? "shortage-card" : ""}><span>النواقص</span><strong>{money(financials.shortages)}</strong></div><div><span>المحصل بعد النواقص</span><strong>{money(financials.collected)}</strong></div><div><span>مستحق المدرس</span><strong>{money(financials.teacherDue)}</strong></div><div className="highlight"><span>صافي السنتر</span><strong>{money(financials.centerNet)}</strong></div></div>{session.status !== "ended" && <div className="student-search-wrap"><label>إضافة طالب للحصة</label><div className="search-box large"><Search size={19} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="ابحث بالاسم، رقم الهاتف أو ID" /></div>{candidates.length > 0 && <div className="search-results">{candidates.map((student) => { const oldDebt = outstandingForStudent(allSessions, debtPayments, student.id); return <button key={student.id} onClick={() => openPayment(student)}><span>{student.name.charAt(0)}</span><div><strong>{student.name}</strong><small>{student.id} · {student.phone}</small>{oldDebt > 0 && <em className="candidate-debt">عليه سابقاً {money(oldDebt)}</em>}</div><Plus size={18} /></button>; })}</div>}</div>}<div className="attendance-list"><div className="attendance-head"><h3>الطلاب الحاضرون</h3><span>{session.studentIds.length} طالب</span></div>{session.studentIds.map((studentId, index) => { const student = students.find((item) => item.id === studentId); const paid = paidDuringSession(session, studentId); const shortage = shortageForAttendance(session, studentId); return <div className="attendance-row" key={studentId}><span className="row-number">{index + 1}</span><span className="student-avatar">{student?.name.charAt(0)}</span><div><strong>{student?.name}</strong><small>{student?.id} · {student && gradeLabel(student.stage, student.grade)}</small></div><span className={shortage ? "debt-badge" : "paid-tag"}>{shortage ? `متبقي ${money(shortage)}` : <><Check size={14} /> دفع كامل</>}</span><strong>{money(paid)}</strong>{session.status !== "ended" && <button className="remove-student" onClick={() => onRemoveStudent(studentId)}><Trash2 size={17} /></button>}</div>; })}</div></div></Modal>{pendingStudent && <Modal title="تسجيل دفع الطالب" subtitle={`${pendingStudent.name} — سعر الحصة ${money(session.studentPrice)}`} onClose={() => setPendingStudent(null)}><div className="modal-body"><div className="payment-choice"><button type="button" className={payFull ? "active" : ""} onClick={() => { setPayFull(true); setPaidAmount(String(session.studentPrice)); }}><Check size={18} /><span><strong>دفع كامل</strong><small>{money(session.studentPrice)} — الاختيار الافتراضي</small></span></button><button type="button" className={!payFull ? "active partial" : ""} onClick={() => { setPayFull(false); setPaidAmount(""); }}><WalletCards size={18} /><span><strong>دفع مبلغ مختلف</strong><small>يتسجل الباقي على الطالب</small></span></button></div>{!payFull && <label className="field payment-amount">المبلغ المدفوع الآن<input autoFocus type="number" min="0" max={session.studentPrice} step="0.01" value={paidAmount} onChange={(event) => setPaidAmount(event.target.value)} placeholder="اكتب المبلغ الذي دفعه الطالب" /><small>المتبقي الذي سيتسجل عليه: {money(Math.max(0, session.studentPrice - normalizePaidAmount(paidAmount || 0, session.studentPrice)))}</small></label>}<div className="teacher-protection-note"><ShieldCheck size={18} /><span>مستحق المدرس يظل {money(session.teacherFee)} عن هذا الطالب سواء دفع كامل أو ناقص. النقص يتحمله السنتر فقط.</span></div></div><div className="modal-actions"><button className="secondary-btn" onClick={() => setPendingStudent(null)}>إلغاء</button><button className="primary-btn" onClick={confirmAttendance} disabled={!payFull && paidAmount === ""}>تأكيد وإضافة الطالب</button></div></Modal>}</>;
+  return <>
+    <Modal title={`${session.subject} — ${gradeLabel(session.stage, session.grade)}`} subtitle={`${session.id} · ${session.room}`} onClose={onClose} wide>
+      <div className="session-modal-body">
+        <div className="session-summary"><div><StatusPill status={session.status} /><h3>{teacherName}</h3><p><CalendarDays size={16} /> {session.date} <Clock3 size={16} /> {session.startedAt ?? session.scheduledTime}</p></div><div className="session-summary-actions">{session.status !== "ended" && <button className="secondary-btn" onClick={onEdit}><Edit3 size={17} /> تعديل</button>}{(session.status === "scheduled" || session.status === "postponed") && <button className="start-btn" onClick={onStart}><Activity size={18} /> {session.status === "postponed" ? "بدء الحصة مجدداً" : "بدء الحصة"}</button>}{session.status === "active" && <><button className="postpone-btn" onClick={onPostpone}><PauseCircle size={18} /> تأجيل الحصة</button><button className="end-btn" onClick={onEnd}><Check size={18} /> إنهاء الحصة</button></>}</div></div>
+        <div className="financial-grid session-financial-grid"><div><span>عدد الطلاب</span><strong>{session.studentIds.length}</strong></div><div><span>قيمة الحصة كاملة</span><strong>{money(financials.fullTotal)}</strong></div><div className={financials.shortages ? "shortage-card" : ""}><span>النواقص</span><strong>{money(financials.shortages)}</strong></div><div><span>المحصل بعد النواقص</span><strong>{money(financials.collected)}</strong></div><div><span>مستحق المدرس</span><strong>{money(financials.teacherDue)}</strong></div><div className="highlight"><span>صافي السنتر</span><strong>{money(financials.centerNet)}</strong></div></div>
+        {session.status !== "ended" && <div className="student-search-wrap"><label>إضافة طالب للحصة</label><div className="search-box large"><Search size={19} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="ابحث بالاسم، رقم الهاتف أو ID" /></div>{candidates.length > 0 && <div className="search-results">{candidates.map((student) => { const oldDebt = outstandingForStudent(allSessions, debtPayments, student.id); return <button key={student.id} onClick={() => openPayment(student)}><span>{student.name.charAt(0)}</span><div><strong>{student.name}</strong><small>{student.id} · {student.phone}</small>{oldDebt > 0 && <em className="candidate-debt">عليه سابقاً {money(oldDebt)}</em>}</div><Plus size={18} /></button>; })}</div>}</div>}
+        <div className="attendance-list"><div className="attendance-head"><h3>الطلاب الحاضرون</h3><span>{session.studentIds.length} طالب</span></div>{session.studentIds.map((studentId, index) => { const student = students.find((item) => item.id === studentId); const paid = paidDuringSession(session, studentId); const shortage = shortageForAttendance(session, studentId); return <div className="attendance-row" key={studentId}><span className="row-number">{index + 1}</span><span className="student-avatar">{student?.name.charAt(0)}</span><div><strong>{student?.name}</strong><small>{student?.id} · {student && gradeLabel(student.stage, student.grade)}</small></div><span className={shortage ? "debt-badge" : "paid-tag"}>{shortage ? `متبقي ${money(shortage)}` : <><Check size={14} /> دفع كامل</>}</span><strong>{money(paid)}</strong>{session.status !== "ended" && <button className="remove-student" onClick={() => onRemoveStudent(studentId)}><Trash2 size={17} /></button>}</div>; })}</div>
+      </div>
+    </Modal>
+    {pendingStudent && <Modal title="تسجيل دفع الطالب" subtitle={`${pendingStudent.name} — سعر الحصة ${money(session.studentPrice)}`} onClose={() => setPendingStudent(null)}>
+      <div className="modal-body">
+        <div className="payment-choice">
+          <button type="button" className={payFull ? "active" : ""} onClick={() => { setPayFull(true); setPaidAmount(String(session.studentPrice)); }}><Check size={18} /><span><strong>دفع الحصة كاملة</strong><small>{money(session.studentPrice)} — الاختيار الافتراضي</small></span></button>
+          <button type="button" className={!payFull ? "active partial" : ""} onClick={() => { setPayFull(false); setPaidAmount(""); }}><WalletCards size={18} /><span><strong>إدخال المبلغ المدفوع</strong><small>{pendingOldDebt > 0 ? "يمكن سداد الحصة والمديونية القديمة معاً" : "يتسجل الباقي على الطالب"}</small></span></button>
+        </div>
+        {pendingOldDebt > 0 && <div className="payment-debt-breakdown" role="status">
+          <div><span>سعر الحصة الحالية</span><strong>{money(session.studentPrice)}</strong></div>
+          <div><span>المبلغ القديم على الطالب</span><strong>{money(pendingOldDebt)}</strong></div>
+          <div className="payment-debt-total"><span>الإجمالي لسداد الكل</span><strong>{money(combinedTotal)}</strong></div>
+        </div>}
+        {!payFull && <label className="field payment-amount">إجمالي المبلغ المدفوع الآن<input autoFocus type="number" min="0" max={combinedTotal} step="0.01" value={paidAmount} onChange={(event) => setPaidAmount(event.target.value)} placeholder="اكتب إجمالي المبلغ الذي دفعه الطالب" /><small>{currentLessonRemaining > 0 ? `متبقي من الحصة الحالية: ${money(currentLessonRemaining)}` : oldDebtPaid > 0 ? `سيتم خصم ${money(oldDebtPaid)} من القديم، والمتبقي القديم ${money(oldDebtRemaining)}` : pendingOldDebt > 0 ? `الحصة الحالية مسددة، والمتبقي القديم ${money(oldDebtRemaining)}` : "تم سداد سعر الحصة بالكامل"}</small>{pendingOldDebt > 0 && oldDebtRemaining === 0 && currentLessonRemaining === 0 && <em className="debt-cleared-note"><Check size={15} /> سيتم سداد المديونية بالكامل وإزالة الطالب من قائمة «طلاب عليهم مبالغ»</em>}</label>}
+        <div className="teacher-protection-note"><ShieldCheck size={18} /><span>مستحق المدرس يظل {money(session.teacherFee)} عن هذا الطالب سواء دفع كامل أو ناقص. أي سداد زائد عن سعر الحصة يخص المديونية القديمة فقط.</span></div>
+      </div>
+      <div className="modal-actions"><button className="secondary-btn" onClick={() => setPendingStudent(null)}>إلغاء</button><button className="primary-btn" onClick={confirmAttendance} disabled={!payFull && paidAmount === ""}>تأكيد وإضافة الطالب</button></div>
+    </Modal>}
+  </>;
 }
 function StudentRecordModal({ student, sessions, teachers, debtPayments, onClose }: { student: Student; sessions: LessonSession[]; teachers: Teacher[]; debtPayments: DebtPayment[]; onClose: () => void }) {
   const history = sessions.filter((lesson) => lesson.studentIds.includes(student.id) && lesson.status === "ended").slice().sort(newestSessionFirst);
@@ -947,7 +1026,14 @@ function AnalyticsPanel({ sessions, bookings, expenses, debtPayments, teachers }
 }
 
 function AuditPanel({ audit }: { audit: AuditEntry[] }) {
-  return <section className="panel data-panel"><div className="data-toolbar"><div><h2>سجل العمليات</h2><p>تتبع كل التغييرات المهمة داخل النظام</p></div><span className="secure-chip"><ShieldCheck size={17} /> سجل محمي</span></div><div className="audit-list">{audit.slice().sort(newestNumericIdFirst).map((entry) => <div key={entry.id}><span className={entry.tone}><History size={18} /></span><div><strong>{entry.action}</strong><p>{entry.details}</p></div><time>{entry.time}</time></div>)}</div></section>;
+  const [selectedEntry, setSelectedEntry] = useState<AuditEntry | null>(null);
+  const recordedAt = selectedEntry && Number(selectedEntry.id) > 1_000_000_000_000
+    ? new Intl.DateTimeFormat("ar-EG", { dateStyle: "full", timeStyle: "short" }).format(new Date(Number(selectedEntry.id)))
+    : selectedEntry?.time;
+  return <>
+    <section className="panel data-panel"><div className="data-toolbar"><div><h2>سجل العمليات</h2><p>تتبع كل التغييرات المهمة داخل النظام · اضغط على أي عملية لعرض تفاصيلها</p></div><span className="secure-chip"><ShieldCheck size={17} /> سجل محمي</span></div><div className="audit-list">{audit.slice().sort(newestNumericIdFirst).map((entry) => <button type="button" key={entry.id} onClick={() => setSelectedEntry(entry)}><span className={entry.tone}><History size={18} /></span><div><strong>{entry.action}</strong><p>{entry.details}</p></div><time>{entry.time}</time><ChevronLeft size={17} /></button>)}</div></section>
+    {selectedEntry && <Modal title="تفاصيل العملية" subtitle={`رقم العملية ${selectedEntry.id}`} onClose={() => setSelectedEntry(null)}><div className="modal-body audit-detail"><div className={`audit-detail-icon ${selectedEntry.tone}`}><History size={24} /></div><div className="audit-detail-title"><span>نوع العملية</span><strong>{selectedEntry.action}</strong></div><div className="audit-detail-card"><span>تفاصيل ما تم</span><p>{selectedEntry.details}</p></div><div className="audit-detail-meta"><div><span>وقت التسجيل</span><strong>{recordedAt}</strong></div><div><span>حالة السجل</span><strong><ShieldCheck size={15} /> محفوظ ومحمي</strong></div></div></div><div className="modal-actions"><button className="primary-btn" onClick={() => setSelectedEntry(null)}>تم</button></div></Modal>}
+  </>;
 }
 
 function SettingsPanel({ subjectCatalog, setSubjectCatalog, rooms, currentUsername, onCredentialsChanged, onAddRoom, onRenameRoom, showToast }: { subjectCatalog: Record<Stage, string[]>; setSubjectCatalog: React.Dispatch<React.SetStateAction<Record<Stage, string[]>>>; rooms: string[]; currentUsername: string; onCredentialsChanged: (username: string) => void; onAddRoom: (room: string) => void; onRenameRoom: (index: number, room: string) => void; showToast: (message: string) => void }) {
