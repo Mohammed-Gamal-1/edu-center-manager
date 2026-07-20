@@ -27,6 +27,10 @@ export function findActiveStudentConflict<T extends StudentConflictSession>(sess
   return sessions.find((session) => session.id !== currentSessionId && session.status === "active" && session.studentIds.includes(studentId));
 }
 
+export function isStudentInSessionGrade(student: { stage: string; grade: string }, session: { stage: string; grade: string }) {
+  return student.stage === session.stage && student.grade === session.grade;
+}
+
 export type BookingMatch = {
   studentId: string;
   teacherId: string;

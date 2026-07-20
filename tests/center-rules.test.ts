@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { findActiveStudentConflict, hasMatchingBooking, nextStudentIdForStage } from "../lib/center-rules.ts";
+import { findActiveStudentConflict, hasMatchingBooking, isStudentInSessionGrade, nextStudentIdForStage } from "../lib/center-rules.ts";
 
 test("student IDs start from the configured six-digit range for each stage", () => {
   assert.equal(nextStudentIdForStage([], "المرحلة الابتدائية"), "101001");
@@ -20,6 +20,13 @@ test("finds a student already attending another active lesson", () => {
   ];
   assert.equal(findActiveStudentConflict(sessions, "2", "101001")?.id, "1");
   assert.equal(findActiveStudentConflict(sessions, "1", "101001"), undefined);
+});
+
+test("session student search only accepts the same stage and grade", () => {
+  const session = { stage: "المرحلة الإعدادية", grade: "الصف الثاني" };
+  assert.equal(isStudentInSessionGrade({ stage: "المرحلة الإعدادية", grade: "الصف الثاني" }, session), true);
+  assert.equal(isStudentInSessionGrade({ stage: "المرحلة الإعدادية", grade: "الصف الأول" }, session), false);
+  assert.equal(isStudentInSessionGrade({ stage: "المرحلة الثانوية", grade: "الصف الثاني" }, session), false);
 });
 
 test("booking match requires the same student, teacher, stage, grade and subject", () => {

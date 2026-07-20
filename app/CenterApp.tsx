@@ -48,7 +48,7 @@ import {
   paidDuringSession,
   shortageForAttendance,
 } from "../lib/center-finance";
-import { findActiveStudentConflict, hasMatchingBooking, nextStudentIdForStage } from "../lib/center-rules";
+import { findActiveStudentConflict, hasMatchingBooking, isStudentInSessionGrade, nextStudentIdForStage } from "../lib/center-rules";
 
 type View = "dashboard" | "students" | "teachers" | "sessions" | "expenses" | "admin";
 type StudentTab = "register" | "bookings" | "records" | "debts";
@@ -839,7 +839,7 @@ function SessionModal({ session, allSessions, debtPayments, bookings, students, 
   const [payFull, setPayFull] = useState(true);
   const [paidAmount, setPaidAmount] = useState(String(session.studentPrice));
   const [studentError, setStudentError] = useState("");
-  const candidates = students.filter((student) => student.active && !session.studentIds.includes(student.id) && query && [student.name, student.phone, student.id].some((value) => value.includes(query))).slice(0, 4);
+  const candidates = students.filter((student) => student.active && isStudentInSessionGrade(student, session) && !session.studentIds.includes(student.id) && query && [student.name, student.phone, student.id].some((value) => value.includes(query))).slice(0, 4);
   const financials = getSessionFinancials(session);
   const pendingOldDebt = pendingStudent ? outstandingForStudent(allSessions, debtPayments, pendingStudent.id) : 0;
   const combinedTotal = session.studentPrice + pendingOldDebt;
