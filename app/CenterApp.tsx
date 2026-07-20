@@ -20,7 +20,6 @@ import {
   LayoutDashboard,
   LockKeyhole,
   LoaderCircle,
-  LogOut,
   Menu,
   MoreHorizontal,
   PauseCircle,
@@ -49,6 +48,7 @@ import {
   paidDuringSession,
   shortageForAttendance,
 } from "../lib/center-finance";
+import { findActiveStudentConflict, hasMatchingBooking, nextStudentIdForStage } from "../lib/center-rules";
 
 type View = "dashboard" | "students" | "teachers" | "sessions" | "expenses" | "admin";
 type StudentTab = "register" | "bookings" | "records" | "debts";
@@ -220,10 +220,14 @@ function StatusPill({ status }: { status: SessionStatus }) {
 export default function CenterApp() {
   const [authenticated, setAuthenticated] = useState(false);
   const [authChecking, setAuthChecking] = useState(true);
-  const [loginLoading, setLoginLoading] = useState(false);
   const [currentUsername, setCurrentUsername] = useState("admin");
-  const [loginError, setLoginError] = useState("");
-  const [recoveryMode, setRecoveryMode] = useState(false);
+  const [adminUnlocked, setAdminUnlocked] = useState(false);
+  const [adminPinOpen, setAdminPinOpen] = useState(false);
+  const [adminRecoveryMode, setAdminRecoveryMode] = useState(false);
+  const [adminAuthLoading, setAdminAuthLoading] = useState(false);
+  const [adminAuthError, setAdminAuthError] = useState("");
+  const [pendingAdminTab, setPendingAdminTab] = useState<AdminTab>("analytics");
+  const [receptionRetry, setReceptionRetry] = useState(0);
   const [view, setView] = useState<View>("dashboard");
   const [mobileNav, setMobileNav] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
@@ -262,17 +266,18 @@ export default function CenterApp() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/auth/session", { cache: "no-store" })
+    fetch("/api/auth/reception", { method: "POST", cache: "no-store" })
       .then((response) => response.json())
-      .then((result: { authenticated?: boolean; username?: string | null }) => {
+      .then((result: { ok?: boolean; username?: string | null }) => {
         if (cancelled) return;
-        setAuthenticated(Boolean(result.authenticated));
+        setAuthenticated(true);
+        setAdminUnlocked(false);
         if (result.username) setCurrentUsername(result.username);
       })
-      .catch(() => { /* The login form remains available if the network is down. */ })
+      .catch(() => { if (!cancelled) setAuthenticated(true); })
       .finally(() => { if (!cancelled) setAuthChecking(false); });
     return () => { cancelled = true; };
-  }, []);
+  }, [receptionRetry]);
 
   useEffect(() => {
     if (!authenticated || dataReady) return;
@@ -322,6 +327,8 @@ export default function CenterApp() {
         if (error.message === "unauthorized") {
           setAuthenticated(false);
           setDataReady(false);
+          setAuthChecking(true);
+          setReceptionRetry((value) => value + 1);
           return;
         }
         if (!pending?.state && cached?.state) {
@@ -367,6 +374,8 @@ export default function CenterApp() {
         if (response.status === 401) {
           setAuthenticated(false);
           setDataReady(false);
+          setAuthChecking(true);
+          setReceptionRetry((value) => value + 1);
           return;
         }
         const result = await response.json() as { ok?: boolean; version?: number; conflict?: boolean; state?: CenterSnapshot };
@@ -453,84 +462,85 @@ export default function CenterApp() {
 
   const teacherName = (id: string) => teachers.find((teacher) => teacher.id === id)?.name ?? "مدرس مؤرشف";
 
+  const openAdmin = (tab: AdminTab = adminTab) => {
+    setPendingAdminTab(tab);
+    setProfileMenuOpen(false);
+    setNotificationsOpen(false);
+    setMobileNav(false);
+    if (adminUnlocked) {
+      setAdminTab(tab);
+      setView("admin");
+      return;
+    }
+    setAdminAuthError("");
+    setAdminRecoveryMode(false);
+    setAdminPinOpen(true);
+  };
+
   const navigate = (target: View) => {
+    if (target === "admin") {
+      openAdmin();
+      return;
+    }
     setView(target);
     setMobileNav(false);
     setProfileMenuOpen(false);
     setNotificationsOpen(false);
   };
 
-  const handleLogin = async (event: FormEvent<HTMLFormElement>) => {
+  const handleAdminPin = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
-    setLoginLoading(true);
-    setLoginError("");
+    setAdminAuthLoading(true);
+    setAdminAuthError("");
     try {
-      const response = await fetch("/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: data.get("username"), password: data.get("password") }) });
+      const response = await fetch("/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password: data.get("pin") }) });
       const result = await response.json() as { ok?: boolean; error?: string; username?: string };
-      if (!response.ok || !result.ok) throw new Error(result.error || "تعذر تسجيل الدخول");
-      setAuthenticated(true);
-      setDataReady(false);
+      if (!response.ok || !result.ok) throw new Error(result.error || "تعذر فتح الإدارة");
+      setAdminUnlocked(true);
+      setAdminPinOpen(false);
+      setAdminTab(pendingAdminTab);
+      setView("admin");
       if (result.username) setCurrentUsername(result.username);
     } catch (error) {
-      setLoginError(error instanceof Error ? error.message : "تعذر تسجيل الدخول");
+      setAdminAuthError(error instanceof Error ? error.message : "تعذر فتح الإدارة");
     } finally {
-      setLoginLoading(false);
+      setAdminAuthLoading(false);
     }
   };
 
-  const handlePasswordRecovery = async (event: FormEvent<HTMLFormElement>) => {
+  const handleAdminPinRecovery = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
-    setLoginLoading(true);
-    setLoginError("");
+    setAdminAuthLoading(true);
+    setAdminAuthError("");
     try {
-      const response = await fetch("/api/auth/recover", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: data.get("username"), recoveryCode: data.get("recoveryCode"), password: data.get("password") }) });
+      const response = await fetch("/api/auth/recover", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username: currentUsername, recoveryCode: data.get("recoveryCode"), password: data.get("pin") }) });
       const result = await response.json() as { ok?: boolean; error?: string; username?: string };
-      if (!response.ok || !result.ok) throw new Error(result.error || "تعذر استرداد الحساب");
-      setAuthenticated(true);
-      setDataReady(false);
-      setRecoveryMode(false);
+      if (!response.ok || !result.ok) throw new Error(result.error || "تعذر استرداد PIN الإدارة");
+      setAdminUnlocked(true);
+      setAdminPinOpen(false);
+      setAdminRecoveryMode(false);
+      setAdminTab(pendingAdminTab);
+      setView("admin");
       if (result.username) setCurrentUsername(result.username);
     } catch (error) {
-      setLoginError(error instanceof Error ? error.message : "تعذر استرداد الحساب");
+      setAdminAuthError(error instanceof Error ? error.message : "تعذر استرداد PIN الإدارة");
     } finally {
-      setLoginLoading(false);
+      setAdminAuthLoading(false);
     }
   };
 
-  const handleLogout = async () => {
-    try { await fetch("/api/auth/logout", { method: "POST" }); } catch { /* Local sign-out still completes. */ }
-    setAuthenticated(false);
-    setDataReady(false);
+  const lockAdmin = async () => {
+    try { await fetch("/api/auth/reception", { method: "POST" }); } catch { /* The local admin gate still locks. */ }
+    setAdminUnlocked(false);
+    if (view === "admin") setView("dashboard");
     setProfileMenuOpen(false);
+    showToast("تم قفل صفحة الإدارة");
   };
 
   if (authChecking) {
     return <main className="login-page app-loading" dir="rtl"><div className="loading-card"><LoaderCircle className="spin" size={31} /><strong>جاري فتح نظام سنتر التفوق</strong><span>يتم التحقق من الجلسة الآمنة…</span></div></main>;
-  }
-
-  if (!authenticated) {
-    return (
-      <main className="login-page" dir="rtl">
-        <div className="login-glow glow-one" /><div className="login-glow glow-two" />
-        <section className="login-brand">
-          <div className="brand-mark large"><BookOpen size={31} /></div>
-          <span className="eyebrow"><Sparkles size={15} /> سنتر التفوق</span>
-          <h1>كل تفاصيل يومك<br /><em>في مكان واحد.</em></h1>
-          <p>الحصص، الطلاب، المدرسين والحسابات — نظام واحد بسيط وآمن يساعدك تركز في اللي يهم.</p>
-          <div className="login-feature-row">
-            <span><ShieldCheck size={19} /> بيانات محمية</span>
-            <span><Activity size={19} /> متابعة لحظية</span>
-          </div>
-        </section>
-        <section className="login-card">
-          <div className="login-card-icon"><LockKeyhole size={24} /></div>
-          {!recoveryMode ? <form onSubmit={handleLogin}><h2>أهلاً برجوعك</h2><p>سجّل دخولك لفتح لوحة إدارة السنتر</p><label>اسم المستخدم<input name="username" autoComplete="username" required /></label><label>كلمة المرور<input name="password" type="password" autoComplete="current-password" minLength={4} required /></label>{loginError && <div className="form-error">{loginError}</div>}<button className="primary-btn login-btn" type="submit" disabled={loginLoading}>{loginLoading ? <><LoaderCircle className="spin" size={18} /> جاري الدخول…</> : <>دخول للنظام <ChevronLeft size={18} /></>}</button><button type="button" className="forgot-password" onClick={() => { setLoginError(""); setRecoveryMode(true); }}>نسيت كلمة المرور؟</button></form> : <form onSubmit={handlePasswordRecovery}><h2>استرداد الحساب</h2><p>استخدم كود الطوارئ الثابت الذي حفظته من الإعدادات</p><label>اسم المستخدم<input name="username" autoComplete="username" defaultValue={currentUsername} required /></label><label>كود الاسترداد<input name="recoveryCode" autoComplete="off" placeholder="XXXX-XXXX-XXXX-XXXX-XXXX" required /></label><label>كلمة المرور الجديدة<input name="password" type="password" autoComplete="new-password" minLength={4} required /></label>{loginError && <div className="form-error">{loginError}</div>}<button className="primary-btn login-btn" type="submit" disabled={loginLoading}>{loginLoading ? <><LoaderCircle className="spin" size={18} /> جاري الاسترداد…</> : <>تعيين كلمة المرور والدخول <ChevronLeft size={18} /></>}</button><button type="button" className="forgot-password" onClick={() => { setLoginError(""); setRecoveryMode(false); }}>العودة لتسجيل الدخول</button></form>}
-          <small>اتصال مشفّر وجلسة إدارة محمية</small>
-        </section>
-      </main>
-    );
   }
 
   if (!dataReady) {
@@ -570,8 +580,8 @@ export default function CenterApp() {
           })}
         </nav>
         <div className="sidebar-bottom">
-          <div className="admin-menu-wrap"><div className="admin-mini"><span>م</span><div><strong>مدير السنتر</strong><small>{currentUsername}</small></div><button className="admin-more" onClick={() => setProfileMenuOpen((open) => !open)} aria-label="فتح قائمة مدير السنتر" aria-expanded={profileMenuOpen}><MoreHorizontal size={18} /></button></div>{profileMenuOpen && <div className="admin-popover" role="menu"><button role="menuitem" onClick={() => { setView("admin"); setAdminTab("settings"); setProfileMenuOpen(false); }}><Settings size={17} /><span><strong>إعدادات الحساب</strong><small>تغيير اسم المستخدم أو كلمة المرور</small></span></button><button role="menuitem" onClick={() => { setView("admin"); setAdminTab("audit"); setProfileMenuOpen(false); }}><History size={17} /><span><strong>سجل العمليات</strong><small>عرض آخر التغييرات</small></span></button><button className="danger" role="menuitem" onClick={handleLogout}><LogOut size={17} /><span><strong>تسجيل الخروج</strong><small>إنهاء الجلسة الحالية</small></span></button></div>}</div>
-          <button className="logout" onClick={handleLogout}><LogOut size={18} /> تسجيل الخروج</button>
+          <div className="admin-menu-wrap"><div className="admin-mini"><span>م</span><div><strong>مدير السنتر</strong><small>{adminUnlocked ? currentUsername : "الإدارة مقفولة"}</small></div><button className="admin-more" onClick={() => setProfileMenuOpen((open) => !open)} aria-label="فتح قائمة مدير السنتر" aria-expanded={profileMenuOpen}><MoreHorizontal size={18} /></button></div>{profileMenuOpen && <div className="admin-popover" role="menu"><button role="menuitem" onClick={() => openAdmin("settings")}><Settings size={17} /><span><strong>إعدادات الإدارة</strong><small>تغيير اسم المستخدم أو PIN</small></span></button><button role="menuitem" onClick={() => openAdmin("audit")}><History size={17} /><span><strong>سجل العمليات</strong><small>عرض آخر التغييرات</small></span></button>{adminUnlocked && <button className="danger" role="menuitem" onClick={lockAdmin}><LockKeyhole size={17} /><span><strong>قفل الإدارة</strong><small>العودة لوضع الريسبشن</small></span></button>}</div>}</div>
+          {adminUnlocked && <button className="logout" onClick={lockAdmin}><LockKeyhole size={18} /> قفل الإدارة</button>}
         </div>
       </aside>
 
@@ -581,7 +591,7 @@ export default function CenterApp() {
         <header className="topbar">
           <button className="mobile-menu icon-btn" onClick={() => setMobileNav(true)} aria-label="فتح القائمة"><Menu size={22} /></button>
           <div className="page-heading"><h1>{pageTitles[view][0]}</h1><p>{pageTitles[view][1]}</p></div>
-          <div className="top-actions"><div className={`sync-chip ${syncStatus}`} title={syncInfo[syncStatus].hint}><SyncIcon className={syncStatus === "saving" || syncStatus === "loading" ? "spin" : ""} size={17} /><span>{syncInfo[syncStatus].label}<small>{syncInfo[syncStatus].hint}</small></span></div><div className="today-chip"><CalendarDays size={17} /><span>{arabicDate()}</span></div><div className="notification-wrap"><button className="icon-btn notification" onClick={() => { setNotificationsOpen((open) => !open); setNotificationsSeen(true); }} aria-label={`التنبيهات: ${notificationCount}`} aria-expanded={notificationsOpen}><Bell size={20} />{!notificationsSeen && notificationCount > 0 && <i />}</button>{notificationsOpen && <div className="notification-popover"><div className="notification-head"><div><strong>الإشعارات</strong><span>{notificationCount} تحديث</span></div><button type="button" onClick={() => setNotificationsOpen(false)} aria-label="إغلاق الإشعارات"><X size={16} /></button></div><div className="notification-list">{notificationSessions.map((lesson) => <button type="button" key={lesson.id} onClick={() => { setNotificationsOpen(false); setSelectedSession(lesson); }}><span className={lesson.status}><Clock3 size={16} /></span><div><strong>{lesson.status === "active" ? "حصة شغالة الآن" : "حصة مؤجلة"}</strong><small>{lesson.subject} · {teacherName(lesson.teacherId)} · {lesson.room}</small></div><ChevronLeft size={16} /></button>)}{audit.slice(0, 3).map((entry) => <button type="button" key={entry.id} onClick={() => { setNotificationsOpen(false); setView("admin"); setAdminTab("audit"); }}><span className={entry.tone}><History size={16} /></span><div><strong>{entry.action}</strong><small>{entry.details}</small></div><ChevronLeft size={16} /></button>)}{!notificationCount && <div className="notification-empty"><Bell size={20} /><span>لا توجد إشعارات جديدة</span></div>}</div><button type="button" className="notification-footer" onClick={() => { setNotificationsOpen(false); setView("admin"); setAdminTab("audit"); }}>عرض سجل العمليات بالكامل <ChevronLeft size={16} /></button></div>}</div></div>
+          <div className="top-actions"><div className={`sync-chip ${syncStatus}`} title={syncInfo[syncStatus].hint}><SyncIcon className={syncStatus === "saving" || syncStatus === "loading" ? "spin" : ""} size={17} /><span>{syncInfo[syncStatus].label}<small>{syncInfo[syncStatus].hint}</small></span></div><div className="today-chip"><CalendarDays size={17} /><span>{arabicDate()}</span></div><div className="notification-wrap"><button className="icon-btn notification" onClick={() => { setNotificationsOpen((open) => !open); setNotificationsSeen(true); }} aria-label={`التنبيهات: ${notificationCount}`} aria-expanded={notificationsOpen}><Bell size={20} />{!notificationsSeen && notificationCount > 0 && <i />}</button>{notificationsOpen && <div className="notification-popover"><div className="notification-head"><div><strong>الإشعارات</strong><span>{notificationCount} تحديث</span></div><button type="button" onClick={() => setNotificationsOpen(false)} aria-label="إغلاق الإشعارات"><X size={16} /></button></div><div className="notification-list">{notificationSessions.map((lesson) => <button type="button" key={lesson.id} onClick={() => { setNotificationsOpen(false); setSelectedSession(lesson); }}><span className={lesson.status}><Clock3 size={16} /></span><div><strong>{lesson.status === "active" ? "حصة شغالة الآن" : "حصة مؤجلة"}</strong><small>{lesson.subject} · {teacherName(lesson.teacherId)} · {lesson.room}</small></div><ChevronLeft size={16} /></button>)}{audit.slice(0, 3).map((entry) => <button type="button" key={entry.id} onClick={() => openAdmin("audit")}><span className={entry.tone}><History size={16} /></span><div><strong>{entry.action}</strong><small>{entry.details}</small></div><ChevronLeft size={16} /></button>)}{!notificationCount && <div className="notification-empty"><Bell size={20} /><span>لا توجد إشعارات جديدة</span></div>}</div><button type="button" className="notification-footer" onClick={() => openAdmin("audit")}>عرض سجل العمليات بالكامل <ChevronLeft size={16} /></button></div>}</div></div>
         </header>
 
         <div className="page-content">
@@ -603,11 +613,17 @@ export default function CenterApp() {
         session={sessions.find((item) => item.id === selectedSession.id) ?? selectedSession}
         allSessions={sessions}
         debtPayments={debtPayments}
+        bookings={bookings}
         students={students}
         teacherName={teacherName(sessions.find((item) => item.id === selectedSession.id)?.teacherId ?? selectedSession.teacherId)}
         onClose={() => { setSelectedSession(null); setEndReview(false); setStartReview(false); setEditSessionOpen(false); }}
         onEdit={() => setEditSessionOpen(true)}
         onAddStudent={(studentId, paidAmount, oldDebtPayment) => {
+          const activeConflict = selectedSession.status === "active" ? findActiveStudentConflict(sessions, selectedSession.id, studentId) : undefined;
+          if (activeConflict) {
+            showToast(`لا يمكن الإضافة: الطالب داخل حصة ${activeConflict.subject} في ${activeConflict.room}`);
+            return;
+          }
           const student = students.find((item) => item.id === studentId);
           const oldDebtBefore = outstandingForStudent(sessions, debtPayments, studentId);
           const appliedOldDebt = Math.min(oldDebtBefore, Math.max(0, oldDebtPayment));
@@ -650,9 +666,13 @@ export default function CenterApp() {
 
       {editSessionOpen && selectedSession && <EditSessionModal session={sessions.find((item) => item.id === selectedSession.id) ?? selectedSession} teachers={teachers} pricing={pricing} sessions={sessions} rooms={rooms} onClose={() => setEditSessionOpen(false)} onSave={(updated) => { setSessions((current) => current.map((lesson) => lesson.id === updated.id ? updated : lesson)); setSelectedSession(updated); setAudit((current) => [{ id: String(Date.now()), action: "تعديل حصة", details: `تم تحديث حصة ${updated.subject} — ${updated.date} ${updated.scheduledTime}`, time: "الآن", tone: "blue" }, ...current]); setEditSessionOpen(false); showToast("تم حفظ تعديلات الحصة"); }} />}
 
-      {startReview && selectedSession && <Modal title="بدء الحصة" subtitle="راجع وقت البداية الفعلي قبل التأكيد" onClose={() => setStartReview(false)}><div className="modal-body"><label className="field">وقت البداية<input type="time" value={startTime} onInput={(event) => setStartTime(event.currentTarget.value)} /></label><div className="date-note"><CalendarDays size={18} /><span><strong>{arabicDate()}</strong>يمكنك تعديل الوقت قبل بدء الحصة</span></div></div><div className="modal-actions"><button className="secondary-btn" onClick={() => setStartReview(false)}>إلغاء</button><button className="primary-btn" onClick={() => { const roomBusy = sessions.some((item) => item.id !== selectedSession.id && item.room === selectedSession.room && item.status === "active"); if (roomBusy) { showToast(`${selectedSession.room} فيها حصة شغالة بالفعل`); return; } setSessions((current) => current.map((item) => item.id === selectedSession.id ? { ...item, status: "active", startedAt: startTime } : item)); setStartReview(false); showToast("بدأت الحصة وتم تسجيل الوقت"); }}>تأكيد بدء الحصة</button></div></Modal>}
+      {startReview && selectedSession && <Modal title="بدء الحصة" subtitle="راجع وقت البداية الفعلي قبل التأكيد" onClose={() => setStartReview(false)}><div className="modal-body"><label className="field">وقت البداية<input type="time" value={startTime} onInput={(event) => setStartTime(event.currentTarget.value)} /></label><div className="date-note"><CalendarDays size={18} /><span><strong>{arabicDate()}</strong>يمكنك تعديل الوقت قبل بدء الحصة</span></div></div><div className="modal-actions"><button className="secondary-btn" onClick={() => setStartReview(false)}>إلغاء</button><button className="primary-btn" onClick={() => { const roomBusy = sessions.some((item) => item.id !== selectedSession.id && item.room === selectedSession.room && item.status === "active"); if (roomBusy) { showToast(`${selectedSession.room} فيها حصة شغالة بالفعل`); return; } const studentConflict = selectedSession.studentIds.map((studentId) => ({ studentId, lesson: findActiveStudentConflict(sessions, selectedSession.id, studentId) })).find((item) => item.lesson); if (studentConflict?.lesson) { const student = students.find((item) => item.id === studentConflict.studentId); showToast(`لا يمكن البدء: ${student?.name ?? "طالب"} داخل حصة ${studentConflict.lesson.subject} في ${studentConflict.lesson.room}`); return; } setSessions((current) => current.map((item) => item.id === selectedSession.id ? { ...item, status: "active", startedAt: startTime } : item)); setStartReview(false); showToast("بدأت الحصة وتم تسجيل الوقت"); }}>تأكيد بدء الحصة</button></div></Modal>}
 
       {endReview && selectedSession && (() => { const lesson = sessions.find((item) => item.id === selectedSession.id) ?? selectedSession; const financials = getSessionFinancials(lesson); return <Modal title="إنهاء الحصة" subtitle="مراجعة الحسابات النهائية قبل نقل الحصة للأرشيف" onClose={() => setEndReview(false)} wide><div className="modal-body"><div className="review-banner"><ShieldCheck size={24} /><div><strong>سيتم قفل بيانات الحصة بعد التأكيد</strong><span>أي تعديل لاحق سيتم تسجيله في سجل العمليات</span></div></div><div className="financial-grid session-financial-grid"><div><span>الطلاب الحاضرون</span><strong>{lesson.studentIds.length}</strong></div><div><span>قيمة الحصة كاملة</span><strong>{money(financials.fullTotal)}</strong></div><div className={financials.shortages ? "shortage-card" : ""}><span>النواقص</span><strong>{money(financials.shortages)}</strong></div><div><span>المحصل بعد النواقص</span><strong>{money(financials.collected)}</strong></div><div><span>مستحق المدرس</span><strong>{money(financials.teacherDue)}</strong></div><div className="highlight"><span>صافي السنتر</span><strong>{money(financials.centerNet)}</strong></div></div></div><div className="modal-actions"><button className="secondary-btn" onClick={() => setEndReview(false)}>رجوع للحصة</button><button className="danger-confirm" onClick={() => { const end = new Date().toTimeString().slice(0, 5); setSessions((current) => current.map((item) => item.id === lesson.id ? { ...item, status: "ended", endedAt: end } : item)); setAudit((current) => [{ id: String(Date.now()), action: "إنهاء حصة", details: `تم إنهاء حصة ${lesson.subject} — صافي السنتر ${money(financials.centerNet)}`, time: "الآن", tone: "green" }, ...current]); setEndReview(false); setSelectedSession(null); showToast("تم إنهاء الحصة ونقلها للأرشيف"); }}>تأكيد وإنهاء الحصة</button></div></Modal>; })()}
+
+      {adminPinOpen && <Modal title={adminRecoveryMode ? "استرداد PIN الإدارة" : "فتح صفحة الإدارة"} subtitle="باقي النظام متاح للريسبشن بدون كلمة مرور" onClose={() => { setAdminPinOpen(false); setAdminRecoveryMode(false); setAdminAuthError(""); }}>
+        {!adminRecoveryMode ? <form className="modal-body admin-pin-form" onSubmit={handleAdminPin}><div className="admin-pin-icon"><LockKeyhole size={25} /></div><label className="field">PIN الإدارة — 4 أرقام<input name="pin" type="password" inputMode="numeric" autoComplete="current-password" minLength={4} maxLength={4} pattern="[0-9]{4}" autoFocus required placeholder="••••" /></label>{adminAuthError && <div className="form-error">{adminAuthError}</div>}<button className="primary-btn" type="submit" disabled={adminAuthLoading}>{adminAuthLoading ? <><LoaderCircle className="spin" size={17} /> جاري الفتح…</> : <>فتح الإدارة <ChevronLeft size={17} /></>}</button><button className="forgot-password" type="button" onClick={() => { setAdminAuthError(""); setAdminRecoveryMode(true); }}>نسيت PIN الإدارة؟</button></form> : <form className="modal-body admin-pin-form" onSubmit={handleAdminPinRecovery}><div className="admin-pin-icon recovery"><ShieldCheck size={25} /></div><label className="field">كود الطوارئ الثابت<input name="recoveryCode" autoComplete="off" required placeholder="XXXX-XXXX-XXXX-XXXX-XXXX" /></label><label className="field">PIN جديد — 4 أرقام<input name="pin" type="password" inputMode="numeric" autoComplete="new-password" minLength={4} maxLength={4} pattern="[0-9]{4}" required placeholder="••••" /></label>{adminAuthError && <div className="form-error">{adminAuthError}</div>}<button className="primary-btn" type="submit" disabled={adminAuthLoading}>{adminAuthLoading ? "جاري الاسترداد…" : "تعيين PIN وفتح الإدارة"}</button><button className="forgot-password" type="button" onClick={() => { setAdminAuthError(""); setAdminRecoveryMode(false); }}>العودة لإدخال PIN</button></form>}
+      </Modal>}
 
       {cloudConflict && <div className="sync-conflict-banner" role="alertdialog" aria-modal="true" aria-labelledby="sync-conflict-title"><div><CloudOff size={23} /><span><strong id="sync-conflict-title">يوجد تعديل محفوظ من جهاز آخر</strong><small>نسخة هذا الجهاز ما زالت محفوظة بأمان. اختر النسخة التي تريد اعتمادها.</small></span></div><div><button type="button" className="secondary-btn" onClick={useCloudConflictCopy}>استخدام النسخة السحابية</button><button type="button" className="primary-btn" onClick={keepLocalConflictCopy}>حفظ نسخة هذا الجهاز</button></div></div>}
       {toast && <div className="toast"><Check size={18} />{toast}</div>}
@@ -701,9 +721,9 @@ function StudentsPage({ tab, setTab, students, setStudents, teachers, bookings, 
   const selectedDebtSessions = selectedDebtStudent ? debtsForStudent(selectedDebtStudent.id) : [];
   const selectedDebtSession = settlingDebt ? sessions.find((lesson) => lesson.id === settlingDebt.sessionId) : undefined;
   const selectedDebtRemaining = selectedDebtSession && selectedDebtStudent ? outstandingForAttendance(selectedDebtSession, selectedDebtStudent.id, debtPayments) : 0;
-  const addStudent = (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); const data = new FormData(event.currentTarget); const newStudent: Student = { id: String(Math.max(...students.map((student) => Number(student.id)), 99) + 1), name: String(data.get("name")), phone: String(data.get("phone")), stage: registerStage, grade: String(data.get("grade")), active: true }; setStudents((current) => [...current, newStudent]); audit((current) => [{ id: String(Date.now()), action: "إضافة طالب", details: `تم تسجيل ${newStudent.name} — ${newStudent.id}`, time: "الآن", tone: "blue" }, ...current]); event.currentTarget.reset(); showToast(`تم تسجيل الطالب بالرقم ${newStudent.id}`); };
+  const addStudent = (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); const data = new FormData(event.currentTarget); const newStudent: Student = { id: nextStudentIdForStage(students.map((student) => student.id), registerStage), name: String(data.get("name")), phone: String(data.get("phone")), stage: registerStage, grade: String(data.get("grade")), active: true }; setStudents((current) => [...current, newStudent]); audit((current) => [{ id: String(Date.now()), action: "إضافة طالب", details: `تم تسجيل ${newStudent.name} — ${newStudent.id}`, time: "الآن", tone: "blue" }, ...current]); event.currentTarget.reset(); showToast(`تم تسجيل الطالب بالرقم ${newStudent.id}`); };
   return <div className="stack-page"><div className="segmented-tabs"><button className={tab === "register" ? "active" : ""} onClick={() => setTab("register")}><UserPlus size={18} /> تسجيل طالب لأول مرة</button><button className={tab === "bookings" ? "active" : ""} onClick={() => setTab("bookings")}><BookOpen size={18} /> الحجز المسبق</button><button className={tab === "records" ? "active" : ""} onClick={() => setTab("records")}><FileClock size={18} /> سجل الطلاب</button><button className={tab === "debts" ? "active" : ""} onClick={() => setTab("debts")}><WalletCards size={18} /> طلاب عليهم مبالغ</button></div>
-    {tab === "register" && <section className="split-layout"><div className="form-panel"><div className="form-panel-head"><span><UserPlus size={22} /></span><div><h2>تسجيل طالب جديد</h2><p>أدخل البيانات الأساسية، وسيتم إنشاء ID رقمي تلقائياً</p></div></div><form className="entity-form" onSubmit={addStudent}><label className="field full">اسم الطالب بالكامل<input name="name" required placeholder="مثال: أحمد محمد علي" /></label><label className="field full">رقم الهاتف<input name="phone" required inputMode="tel" placeholder="01xxxxxxxxx" /></label><label className="field">المرحلة<select value={registerStage} onChange={(event) => setRegisterStage(event.target.value as Stage)}>{stages.map((stage) => <option key={stage}>{stage}</option>)}</select></label><label className="field">الصف<select name="grade" required>{gradesByStage[registerStage].map((grade) => <option key={grade}>{grade}</option>)}</select></label><div className="info-note full"><ShieldCheck size={18} /><span>يمكن استخدام نفس رقم الهاتف لأكثر من طالب، والـID الرقمي هو المعرف الأساسي.</span></div><button className="primary-btn full" type="submit"><Plus size={18} /> تسجيل الطالب</button></form></div><div className="tip-card"><span><Sparkles size={25} /></span><h3>تسجيل سريع وواضح</h3><p>بعد التسجيل سيظهر الطالب فوراً في السجل، ويمكن البحث عنه وإضافته لأي حصة أو حجز مسبق.</p><div><Check size={17} /> ID رقمي تلقائي</div><div><Check size={17} /> تعديل وأرشفة</div><div><Check size={17} /> سجل حضور كامل</div></div></section>}
+    {tab === "register" && <section className="split-layout"><div className="form-panel"><div className="form-panel-head"><span><UserPlus size={22} /></span><div><h2>تسجيل طالب جديد</h2><p>أدخل البيانات الأساسية، وسيتم إنشاء ID من 6 أرقام حسب المرحلة</p></div></div><form className="entity-form" onSubmit={addStudent}><label className="field full">اسم الطالب بالكامل<input name="name" required placeholder="مثال: أحمد محمد علي" /></label><label className="field full">رقم الهاتف<input name="phone" required inputMode="tel" placeholder="01xxxxxxxxx" /></label><label className="field">المرحلة<select value={registerStage} onChange={(event) => setRegisterStage(event.target.value as Stage)}>{stages.map((stage) => <option key={stage}>{stage}</option>)}</select></label><label className="field">الصف<select name="grade" required>{gradesByStage[registerStage].map((grade) => <option key={grade}>{grade}</option>)}</select></label><div className="student-id-preview full"><span>رقم الطالب المتوقع</span><strong>{nextStudentIdForStage(students.map((student) => student.id), registerStage)}</strong><small>{registerStage === "المرحلة الابتدائية" ? "10" : registerStage === "المرحلة الإعدادية" ? "20" : "30"} يحدد المرحلة · آخر 4 أرقام كود الطالب</small></div><div className="info-note full"><ShieldCheck size={18} /><span>يمكن استخدام نفس رقم الهاتف لأكثر من طالب، والـID الرقمي المكوّن من 6 أرقام هو المعرف الأساسي.</span></div><button className="primary-btn full" type="submit"><Plus size={18} /> تسجيل الطالب</button></form></div><div className="tip-card"><span><Sparkles size={25} /></span><h3>تسجيل سريع وواضح</h3><p>بعد التسجيل سيظهر الطالب فوراً في السجل، ويمكن البحث عنه وإضافته لأي حصة أو حجز مسبق.</p><div><Check size={17} /> ID حسب المرحلة</div><div><Check size={17} /> تعديل وأرشفة</div><div><Check size={17} /> سجل حضور كامل</div></div></section>}
     {tab === "bookings" && <BookingsPanel students={students} teachers={teachers} bookings={bookings} setBookings={setBookings} showToast={showToast} />}
     {tab === "debts" && <><section className="panel data-panel debt-panel"><div className="data-toolbar"><div><h2>الطلاب الذين عليهم مبالغ</h2><p>{studentsWithDebt.length} طالب · التحصيل هنا مستقل عن سعر أي حصة جديدة</p></div><div className="search-box"><Search size={18} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="ابحث بالاسم، الهاتف أو ID" /></div></div>{studentsWithDebt.length ? <div className="table-wrap"><table><thead><tr><th>الطالب</th><th>ID</th><th>عدد الحصص الناقصة</th><th>إجمالي المتبقي</th><th>آخر حصة ناقصة</th><th>إجراء</th></tr></thead><tbody>{studentsWithDebt.map((student) => { const debtSessions = debtsForStudent(student.id); const totalDebt = outstandingForStudent(sessions, debtPayments, student.id); const latest = debtSessions[0]; return <tr key={student.id}><td><div className="person-cell student"><span>{student.name.charAt(0)}</span><strong>{student.name}</strong></div><small>{student.phone}</small></td><td><code>{student.id}</code></td><td>{debtSessions.length} حصة</td><td><span className="debt-amount">{money(totalDebt)}</span></td><td><strong>{latest?.subject}</strong><small>{latest?.date}</small></td><td><div className="table-actions"><button onClick={() => onOpenStudent(student)} title="فتح سجل الطالب"><FileClock size={17} /></button><button className="settle-debt-btn" onClick={() => latest && setSettlingDebt({ studentId: student.id, sessionId: latest.id })}><WalletCards size={17} /> تسجيل سداد</button></div></td></tr>; })}</tbody></table></div> : <EmptyState icon={<WalletCards />} title="لا توجد مديونيات حالية" text="كل الطلاب مسددون قيمة حصصهم بالكامل" />}</section>{settlingDebt && selectedDebtStudent && selectedDebtSession && <Modal title="تسجيل سداد مديونية" subtitle={`${selectedDebtStudent.name} — ID ${selectedDebtStudent.id}`} onClose={() => setSettlingDebt(null)}><form className="modal-body entity-form" onSubmit={(event) => { event.preventDefault(); const data = new FormData(event.currentTarget); const amount = Math.min(selectedDebtRemaining, Math.max(0, Number(data.get("amount")))); if (!amount) { showToast("أدخل مبلغ سداد صحيح"); return; } const payment: DebtPayment = { id: String(Math.max(...debtPayments.map((item) => Number(item.id)), 0) + 1), studentId: selectedDebtStudent.id, sessionId: selectedDebtSession.id, amount, date: todayIso(), note: String(data.get("note") ?? "") }; setDebtPayments((current) => [payment, ...current]); audit((current) => [{ id: String(Date.now()), action: "سداد مديونية طالب", details: `تم تحصيل ${money(amount)} من ${selectedDebtStudent.name} عن حصة ${selectedDebtSession.subject} بدون تعديل سعر أي حصة جديدة`, time: "الآن", tone: "green" }, ...current]); setSettlingDebt(null); showToast(amount === selectedDebtRemaining ? "تم سداد المبلغ المتبقي بالكامل" : "تم تسجيل السداد الجزئي وتحديث المتبقي"); }}><label className="field full">الحصة المرتبطة بالمبلغ<select value={settlingDebt.sessionId} onChange={(event) => setSettlingDebt({ ...settlingDebt, sessionId: event.target.value })}>{selectedDebtSessions.map((lesson) => <option key={lesson.id} value={lesson.id}>{lesson.date} — {lesson.subject} — متبقي {money(outstandingForAttendance(lesson, selectedDebtStudent.id, debtPayments))}</option>)}</select></label><div className="debt-settlement-summary full"><span>المبلغ المتبقي على الحصة</span><strong>{money(selectedDebtRemaining)}</strong><small>هذا السداد يخص الحصة القديمة فقط، ولا يغيّر حساب الحصة التالية أو مستحق المدرس.</small></div><label className="field full">المبلغ المدفوع الآن<input name="amount" type="number" min="0.01" max={selectedDebtRemaining} step="0.01" defaultValue={selectedDebtRemaining} key={`${selectedDebtSession.id}-${selectedDebtRemaining}`} required /></label><label className="field full">ملاحظة (اختياري)<input name="note" placeholder="مثال: سداد باقي حصة يوم الخميس" /></label><button className="primary-btn full" type="submit">تأكيد السداد</button></form></Modal>}</>}
     {tab === "records" && <section className="panel data-panel"><div className="data-toolbar"><div><h2>سجل الطلاب</h2><p>{filtered.length} طالب نشط</p></div><div className="search-box"><Search size={18} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="ابحث بالاسم، الهاتف أو ID" /></div></div><div className="table-wrap"><table><thead><tr><th>الطالب</th><th>ID</th><th>رقم الهاتف</th><th>المرحلة</th><th>الصف</th><th>مرات الحضور</th><th>إجراءات</th></tr></thead><tbody>{filtered.map((student) => <tr key={student.id}><td><div className="person-cell student"><span>{student.name.charAt(0)}</span><strong>{student.name}</strong></div></td><td><code>{student.id}</code></td><td>{student.phone}</td><td>{student.stage}</td><td>{student.grade}</td><td><span className="attendance-badge">{sessions.filter((lesson) => lesson.studentIds.includes(student.id) && lesson.status === "ended").length} حصة</span></td><td><div className="table-actions"><button onClick={() => onOpenStudent(student)} title="فتح السجل"><FileClock size={17} /></button><button onClick={() => { setEditStage(student.stage); setEditStudent(student); }} title="تعديل"><Edit3 size={17} /></button><button className="archive-action" onClick={() => { setStudents((current) => current.map((item) => item.id === student.id ? { ...item, active: false } : item)); showToast("تم نقل الطالب للأرشيف"); }} title="أرشفة"><Archive size={17} /></button></div></td></tr>)}</tbody></table></div></section>}
@@ -715,11 +735,18 @@ function BookingsPanel({ students, teachers, bookings, setBookings, showToast }:
   const [open, setOpen] = useState(false);
   const [teacherId, setTeacherId] = useState(teachers.find((teacher) => teacher.active)?.id ?? "");
   const [assignmentIndex, setAssignmentIndex] = useState(0);
+  const [query, setQuery] = useState("");
+  const [studentQuery, setStudentQuery] = useState("");
+  const [selectedStudentId, setSelectedStudentId] = useState("");
   const selectedTeacher = teachers.find((teacher) => teacher.id === teacherId);
   const selectedAssignment = selectedTeacher?.assignments[assignmentIndex] ?? selectedTeacher?.assignments[0];
-  const active = bookings.filter((booking) => booking.active).slice().sort((left, right) => right.createdAt.localeCompare(left.createdAt) || newestNumericIdFirst(left, right));
-  return <section className="panel data-panel"><div className="data-toolbar"><div><h2>الحجوزات المسبقة</h2><p>ربط الطالب بالمدرس وتسجيل قيمة الحجز بعيداً عن حساب الحصص</p></div><button className="primary-btn" onClick={() => setOpen(true)}><Plus size={18} /> حجز جديد</button></div><div className="booking-grid">{active.map((booking) => { const student = students.find((item) => item.id === booking.studentId); const teacher = teachers.find((item) => item.id === booking.teacherId); return <article key={booking.id} className="booking-card"><div className="booking-top"><span className="student-avatar">{student?.name.charAt(0)}</span><div><strong>{student?.name}</strong><small>{student?.id} · {booking.createdAt}</small></div><button onClick={() => { setBookings((current) => current.map((item) => item.id === booking.id ? { ...item, active: false } : item)); showToast("تم نقل الحجز للأرشيف"); }} aria-label="أرشفة الحجز"><Archive size={17} /></button></div><div className="booking-link"><span><GraduationCap size={17} /> {teacher?.name}</span><span><BookOpen size={17} /> {booking.subject}</span><span>{booking.stage} · {booking.grade}</span></div><div className="booking-fee"><span>قيمة الحجز</span><strong>{money(booking.bookingFee)}</strong></div></article>; })}</div>{!active.length && <EmptyState icon={<BookOpen />} title="لا توجد حجوزات مسبقة" text="ابدأ بربط طالب مع المدرس المناسب" />}
-    {open && <Modal title="حجز مسبق جديد" subtitle="قيمة الحجز مستقلة تماماً عن سعر الحصة" onClose={() => setOpen(false)}><form className="modal-body entity-form" onSubmit={(event) => { event.preventDefault(); const data = new FormData(event.currentTarget); if (!selectedTeacher || !selectedAssignment) return; setBookings((current) => [...current, { id: String(Math.max(...current.map((booking) => Number(booking.id)), 0) + 1), studentId: String(data.get("student")), teacherId: selectedTeacher.id, stage: selectedAssignment.stage, grade: selectedAssignment.grade, subject: selectedAssignment.subject, bookingFee: Number(data.get("bookingFee")), createdAt: todayIso(), active: true }]); setOpen(false); showToast("تم إنشاء الحجز وتسجيل قيمته"); }}><label className="field full">الطالب<select name="student">{students.filter((student) => student.active).map((student) => <option key={student.id} value={student.id}>{student.name} — {student.id}</option>)}</select></label><label className="field full">المدرس<select value={teacherId} onChange={(event) => { setTeacherId(event.target.value); setAssignmentIndex(0); }}>{teachers.filter((teacher) => teacher.active).map((teacher) => <option key={teacher.id} value={teacher.id}>{teacher.name}</option>)}</select></label><label className="field full">المرحلة والصف والمادة<select value={assignmentIndex} onChange={(event) => setAssignmentIndex(Number(event.target.value))}>{selectedTeacher?.assignments.map((assignment, index) => <option value={index} key={`${assignment.stage}-${assignment.grade}-${assignment.subject}`}>{assignment.stage} — {assignment.grade} — {assignment.subject}</option>)}</select></label><label className="field full">قيمة الحجز<input name="bookingFee" type="number" min="0" required placeholder="مثال: 200" /></label><div className="info-note full"><CircleDollarSign size={18} /> قيمة الحجز مستقلة عن الحصص ولا تدخل في حساب مستحق المدرس أو صافي الحصة.</div><button className="primary-btn full" type="submit">تأكيد الحجز</button></form></Modal>}
+  const normalized = query.trim().toLocaleLowerCase("ar");
+  const active = bookings.filter((booking) => booking.active).filter((booking) => { const student = students.find((item) => item.id === booking.studentId); const teacher = teachers.find((item) => item.id === booking.teacherId); return !normalized || `${student?.name ?? ""} ${student?.phone ?? ""} ${student?.id ?? ""} ${teacher?.name ?? ""} ${booking.subject} ${booking.grade}`.toLocaleLowerCase("ar").includes(normalized); }).slice().sort((left, right) => right.createdAt.localeCompare(left.createdAt) || newestNumericIdFirst(left, right));
+  const studentCandidates = students.filter((student) => student.active && studentQuery.trim() && [student.name, student.phone, student.id].some((value) => value.toLocaleLowerCase("ar").includes(studentQuery.trim().toLocaleLowerCase("ar")))).slice(0, 6);
+  const selectedStudent = students.find((student) => student.id === selectedStudentId);
+  const closeBooking = () => { setOpen(false); setStudentQuery(""); setSelectedStudentId(""); };
+  return <section className="panel data-panel"><div className="data-toolbar"><div><h2>الحجوزات المسبقة</h2><p>ربط الطالب بالمدرس وتسجيل قيمة الحجز بعيداً عن حساب الحصص</p></div><div className="toolbar-actions"><div className="search-box"><Search size={18} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="ابحث بالطالب، الهاتف، المدرس أو المادة" /></div><button className="primary-btn" onClick={() => setOpen(true)}><Plus size={18} /> حجز جديد</button></div></div><div className="booking-grid">{active.map((booking) => { const student = students.find((item) => item.id === booking.studentId); const teacher = teachers.find((item) => item.id === booking.teacherId); return <article key={booking.id} className="booking-card"><div className="booking-top"><span className="student-avatar">{student?.name.charAt(0)}</span><div><strong>{student?.name}</strong><small>{student?.id} · {booking.createdAt}</small></div><button onClick={() => { setBookings((current) => current.map((item) => item.id === booking.id ? { ...item, active: false } : item)); showToast("تم نقل الحجز للأرشيف"); }} aria-label="أرشفة الحجز"><Archive size={17} /></button></div><div className="booking-link"><span><GraduationCap size={17} /> {teacher?.name}</span><span><BookOpen size={17} /> {booking.subject}</span><span>{booking.stage} · {booking.grade}</span></div><div className="booking-fee"><span>قيمة الحجز</span><strong>{money(booking.bookingFee)}</strong></div></article>; })}</div>{!active.length && <EmptyState icon={<BookOpen />} title="لا توجد حجوزات مطابقة" text={query ? "غيّر كلمات البحث لعرض حجوزات أخرى" : "ابدأ بربط طالب مع المدرس المناسب"} />}
+    {open && <Modal title="حجز مسبق جديد" subtitle="ابحث عن الطالب ثم اربطه بالمدرس والمادة" onClose={closeBooking}><form className="modal-body entity-form" onSubmit={(event) => { event.preventDefault(); const data = new FormData(event.currentTarget); if (!selectedTeacher || !selectedAssignment || !selectedStudentId) { showToast("ابحث عن الطالب واختره أولاً"); return; } setBookings((current) => [...current, { id: String(Math.max(...current.map((booking) => Number(booking.id)), 0) + 1), studentId: selectedStudentId, teacherId: selectedTeacher.id, stage: selectedAssignment.stage, grade: selectedAssignment.grade, subject: selectedAssignment.subject, bookingFee: Number(data.get("bookingFee")), createdAt: todayIso(), active: true }]); closeBooking(); showToast("تم إنشاء الحجز وتسجيل قيمته"); }}><div className="field full booking-student-search"><span>الطالب</span>{selectedStudent ? <div className="selected-student-chip"><span>{selectedStudent.name.charAt(0)}</span><div><strong>{selectedStudent.name}</strong><small>{selectedStudent.id} · {selectedStudent.phone}</small></div><button type="button" onClick={() => { setSelectedStudentId(""); setStudentQuery(""); }} aria-label="تغيير الطالب"><X size={16} /></button></div> : <><div className="search-box large"><Search size={18} /><input value={studentQuery} onChange={(event) => setStudentQuery(event.target.value)} autoFocus placeholder="ابحث بالاسم، الهاتف أو ID" /></div>{studentCandidates.length > 0 && <div className="booking-student-results">{studentCandidates.map((student) => <button type="button" key={student.id} onClick={() => { setSelectedStudentId(student.id); setStudentQuery(student.name); }}><span>{student.name.charAt(0)}</span><div><strong>{student.name}</strong><small>{student.id} · {student.phone}</small></div><ChevronLeft size={16} /></button>)}</div>}</>}</div><label className="field full">المدرس<select value={teacherId} onChange={(event) => { setTeacherId(event.target.value); setAssignmentIndex(0); }}>{teachers.filter((teacher) => teacher.active).map((teacher) => <option key={teacher.id} value={teacher.id}>{teacher.name}</option>)}</select></label><label className="field full">المرحلة والصف والمادة<select value={assignmentIndex} onChange={(event) => setAssignmentIndex(Number(event.target.value))}>{selectedTeacher?.assignments.map((assignment, index) => <option value={index} key={`${assignment.stage}-${assignment.grade}-${assignment.subject}`}>{assignment.stage} — {assignment.grade} — {assignment.subject}</option>)}</select></label><label className="field full">قيمة الحجز<input name="bookingFee" type="number" min="0" required placeholder="مثال: 200" /></label><div className="info-note full"><CircleDollarSign size={18} /> قيمة الحجز مستقلة عن الحصص ولا تدخل في حساب مستحق المدرس أو صافي الحصة.</div><button className="primary-btn full" type="submit">تأكيد الحجز</button></form></Modal>}
   </section>;
 }
 
@@ -802,11 +829,12 @@ function EditSessionModal({ session, teachers, pricing, sessions, rooms, onClose
   return <Modal title="تعديل بيانات الحصة" subtitle={`${session.id} · التغييرات تُسجل في سجل العمليات`} onClose={onClose} wide><form className="modal-body entity-form" onSubmit={submit}><label className="field full">المدرس<select value={teacherId} onChange={(event) => { setTeacherId(event.target.value); setAssignmentIndex(0); }}>{teachers.filter((item) => item.active || item.id === session.teacherId).map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label><label className="field full">المرحلة والصف والمادة<select value={assignmentIndex} onChange={(event) => setAssignmentIndex(Number(event.target.value))}>{teacher?.assignments.map((item, index) => <option key={`${item.stage}-${item.grade}-${item.subject}`} value={index}>{item.stage} — {item.grade} — {item.subject}</option>)}</select></label><label className="field">التاريخ<input type="date" value={date} onInput={(event) => setDate(event.currentTarget.value)} required /></label><label className="field">الساعة<input type="time" value={time} onInput={(event) => setTime(event.currentTarget.value)} required /></label><label className="field full">القاعة<select value={room} onChange={(event) => setRoom(event.target.value)}>{rooms.map((item) => <option key={item}>{item}</option>)}</select></label><div className="price-preview full"><div><span>سعر الطالب بعد التعديل</span><strong>{money(rule?.studentPrice ?? session.studentPrice)}</strong></div><div><span>أجر المدرس / طالب</span><strong>{money(rule?.teacherFee ?? session.teacherFee)}</strong></div></div>{conflictError && <div className="form-error full">{conflictError}</div>}<div className="modal-actions full"><button type="button" className="secondary-btn" onClick={onClose}>إلغاء</button><button className="primary-btn" type="submit">حفظ تعديلات الحصة</button></div></form></Modal>;
 }
 
-function SessionModal({ session, allSessions, debtPayments, students, teacherName, onClose, onEdit, onAddStudent, onRemoveStudent, onStart, onPostpone, onEnd }: { session: LessonSession; allSessions: LessonSession[]; debtPayments: DebtPayment[]; students: Student[]; teacherName: string; onClose: () => void; onEdit: () => void; onAddStudent: (id: string, paidAmount: number, oldDebtPayment: number) => void; onRemoveStudent: (id: string) => void; onStart: () => void; onPostpone: () => void; onEnd: () => void }) {
+function SessionModal({ session, allSessions, debtPayments, bookings, students, teacherName, onClose, onEdit, onAddStudent, onRemoveStudent, onStart, onPostpone, onEnd }: { session: LessonSession; allSessions: LessonSession[]; debtPayments: DebtPayment[]; bookings: Booking[]; students: Student[]; teacherName: string; onClose: () => void; onEdit: () => void; onAddStudent: (id: string, paidAmount: number, oldDebtPayment: number) => void; onRemoveStudent: (id: string) => void; onStart: () => void; onPostpone: () => void; onEnd: () => void }) {
   const [query, setQuery] = useState("");
   const [pendingStudent, setPendingStudent] = useState<Student | null>(null);
   const [payFull, setPayFull] = useState(true);
   const [paidAmount, setPaidAmount] = useState(String(session.studentPrice));
+  const [studentError, setStudentError] = useState("");
   const candidates = students.filter((student) => student.active && !session.studentIds.includes(student.id) && query && [student.name, student.phone, student.id].some((value) => value.includes(query))).slice(0, 4);
   const financials = getSessionFinancials(session);
   const pendingOldDebt = pendingStudent ? outstandingForStudent(allSessions, debtPayments, pendingStudent.id) : 0;
@@ -816,7 +844,14 @@ function SessionModal({ session, allSessions, debtPayments, students, teacherNam
   const oldDebtPaid = Math.min(pendingOldDebt, Math.max(0, enteredTotal - session.studentPrice));
   const currentLessonRemaining = Math.max(0, session.studentPrice - currentLessonPaid);
   const oldDebtRemaining = Math.max(0, pendingOldDebt - oldDebtPaid);
+  const pendingHasBooking = pendingStudent ? hasMatchingBooking(bookings, session, pendingStudent.id) : false;
   const openPayment = (student: Student) => {
+    const conflict = session.status === "active" ? findActiveStudentConflict(allSessions, session.id, student.id) : undefined;
+    if (conflict) {
+      setStudentError(`لا يمكن إضافة ${student.name}: الطالب داخل حصة ${conflict.subject} في ${conflict.room}`);
+      return;
+    }
+    setStudentError("");
     setPendingStudent(student);
     setPayFull(true);
     setPaidAmount(String(session.studentPrice));
@@ -832,12 +867,13 @@ function SessionModal({ session, allSessions, debtPayments, students, teacherNam
       <div className="session-modal-body">
         <div className="session-summary"><div><StatusPill status={session.status} /><h3>{teacherName}</h3><p><CalendarDays size={16} /> {session.date} <Clock3 size={16} /> {session.startedAt ?? session.scheduledTime}</p></div><div className="session-summary-actions">{session.status !== "ended" && <button className="secondary-btn" onClick={onEdit}><Edit3 size={17} /> تعديل</button>}{(session.status === "scheduled" || session.status === "postponed") && <button className="start-btn" onClick={onStart}><Activity size={18} /> {session.status === "postponed" ? "بدء الحصة مجدداً" : "بدء الحصة"}</button>}{session.status === "active" && <><button className="postpone-btn" onClick={onPostpone}><PauseCircle size={18} /> تأجيل الحصة</button><button className="end-btn" onClick={onEnd}><Check size={18} /> إنهاء الحصة</button></>}</div></div>
         <div className="financial-grid session-financial-grid"><div><span>عدد الطلاب</span><strong>{session.studentIds.length}</strong></div><div><span>قيمة الحصة كاملة</span><strong>{money(financials.fullTotal)}</strong></div><div className={financials.shortages ? "shortage-card" : ""}><span>النواقص</span><strong>{money(financials.shortages)}</strong></div><div><span>المحصل بعد النواقص</span><strong>{money(financials.collected)}</strong></div><div><span>مستحق المدرس</span><strong>{money(financials.teacherDue)}</strong></div><div className="highlight"><span>صافي السنتر</span><strong>{money(financials.centerNet)}</strong></div></div>
-        {session.status !== "ended" && <div className="student-search-wrap"><label>إضافة طالب للحصة</label><div className="search-box large"><Search size={19} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="ابحث بالاسم، رقم الهاتف أو ID" /></div>{candidates.length > 0 && <div className="search-results">{candidates.map((student) => { const oldDebt = outstandingForStudent(allSessions, debtPayments, student.id); return <button key={student.id} onClick={() => openPayment(student)}><span>{student.name.charAt(0)}</span><div><strong>{student.name}</strong><small>{student.id} · {student.phone}</small>{oldDebt > 0 && <em className="candidate-debt">عليه سابقاً {money(oldDebt)}</em>}</div><Plus size={18} /></button>; })}</div>}</div>}
+        {session.status !== "ended" && <div className="student-search-wrap"><label>إضافة طالب للحصة</label><div className="search-box large"><Search size={19} /><input value={query} onChange={(event) => { setQuery(event.target.value); setStudentError(""); }} placeholder="ابحث بالاسم، رقم الهاتف أو ID" /></div>{studentError && <div className="student-conflict-alert"><Users size={17} /> {studentError}</div>}{candidates.length > 0 && <div className="search-results">{candidates.map((student) => { const oldDebt = outstandingForStudent(allSessions, debtPayments, student.id); const conflict = session.status === "active" ? findActiveStudentConflict(allSessions, session.id, student.id) : undefined; return <button key={student.id} className={conflict ? "student-busy" : ""} onClick={() => openPayment(student)}><span>{student.name.charAt(0)}</span><div><strong>{student.name}</strong><small>{student.id} · {student.phone}</small>{oldDebt > 0 && <em className="candidate-debt">عليه سابقاً {money(oldDebt)}</em>}{conflict && <em className="candidate-conflict">داخل حصة {conflict.subject} · {conflict.room}</em>}</div>{conflict ? <X size={18} /> : <Plus size={18} />}</button>; })}</div>}</div>}
         <div className="attendance-list"><div className="attendance-head"><h3>الطلاب الحاضرون</h3><span>{session.studentIds.length} طالب</span></div>{session.studentIds.map((studentId, index) => { const student = students.find((item) => item.id === studentId); const paid = paidDuringSession(session, studentId); const shortage = shortageForAttendance(session, studentId); return <div className="attendance-row" key={studentId}><span className="row-number">{index + 1}</span><span className="student-avatar">{student?.name.charAt(0)}</span><div><strong>{student?.name}</strong><small>{student?.id} · {student && gradeLabel(student.stage, student.grade)}</small></div><span className={shortage ? "debt-badge" : "paid-tag"}>{shortage ? `متبقي ${money(shortage)}` : <><Check size={14} /> دفع كامل</>}</span><strong>{money(paid)}</strong>{session.status !== "ended" && <button className="remove-student" onClick={() => onRemoveStudent(studentId)}><Trash2 size={17} /></button>}</div>; })}</div>
       </div>
     </Modal>
     {pendingStudent && <Modal title="تسجيل دفع الطالب" subtitle={`${pendingStudent.name} — سعر الحصة ${money(session.studentPrice)}`} onClose={() => setPendingStudent(null)}>
       <div className="modal-body">
+        <div className={`booking-check-note ${pendingHasBooking ? "booked" : "not-booked"}`}>{pendingHasBooking ? <Check size={18} /> : <BookOpen size={18} />}<div><strong>{pendingHasBooking ? "الطالب حاجز هذه المادة" : "الطالب غير حاجز هذه المادة"}</strong><small>{session.subject} مع {teacherName} — {session.grade}</small></div></div>
         <div className="payment-choice">
           <button type="button" className={payFull ? "active" : ""} onClick={() => { setPayFull(true); setPaidAmount(String(session.studentPrice)); }}><Check size={18} /><span><strong>دفع الحصة كاملة</strong><small>{money(session.studentPrice)} — الاختيار الافتراضي</small></span></button>
           <button type="button" className={!payFull ? "active partial" : ""} onClick={() => { setPayFull(false); setPaidAmount(""); }}><WalletCards size={18} /><span><strong>إدخال المبلغ المدفوع</strong><small>{pendingOldDebt > 0 ? "يمكن سداد الحصة والمديونية القديمة معاً" : "يتسجل الباقي على الطالب"}</small></span></button>
@@ -1088,5 +1124,5 @@ function SettingsPanel({ subjectCatalog, setSubjectCatalog, rooms, currentUserna
       setRecoveryCodeLoading(false);
     }
   };
-  return <div className="settings-stack"><section className="panel settings-section"><div className="settings-icon"><LockKeyhole size={21} /></div><div className="settings-copy"><h3>بيانات الدخول</h3><p>تغيير اسم المستخدم أو كلمة المرور للإدارة</p></div><form onSubmit={saveCredentials}><label className="field">اسم المستخدم<input value={username} minLength={3} onChange={(event) => setUsername(event.target.value)} required /></label><label className="field">كلمة المرور الجديدة<input name="newPassword" type="password" minLength={4} placeholder="اتركها فارغة بدون تغيير" /></label><button className="primary-btn" type="submit" disabled={credentialsSaving}>{credentialsSaving ? "جاري الحفظ…" : "حفظ التغييرات"}</button></form></section><section className="panel settings-section recovery-settings"><div className="settings-icon recovery"><ShieldCheck size={21} /></div><div className="settings-copy"><h3>استرداد كلمة المرور</h3><p>أنشئ كود طوارئ واحفظه خارج الجهاز. يظل ثابتًا وصالحًا حتى تنشئ كودًا جديدًا، والكود الجديد يلغي السابق.</p></div><div className="recovery-actions">{recoveryCode ? <div className="recovery-code-display"><span>احفظ هذا الكود الآن — سيظل صالحًا حتى تغييره</span><code>{recoveryCode}</code><button type="button" className="secondary-btn" onClick={async () => { await navigator.clipboard.writeText(recoveryCode); showToast("تم نسخ كود الاسترداد"); }}>نسخ الكود</button></div> : <button type="button" className="primary-btn" onClick={generateRecoveryCode} disabled={recoveryCodeLoading}>{recoveryCodeLoading ? "جاري الإنشاء…" : "إنشاء كود استرداد"}</button>}</div></section><section className="panel settings-section"><div className="settings-icon rooms"><BookOpen size={21} /></div><div className="settings-copy"><h3>قاعات السنتر</h3><p>القاعات المتاحة عند إنشاء الحصة</p></div><div className="room-manager"><div className="room-settings">{rooms.map((room, index) => <button type="button" className="room-pill" key={`${room}-${index}`} onClick={() => setRoomEditor({ index, value: room })} aria-label={`تعديل اسم ${room}`}><i /><span>{room}</span><Edit3 size={15} /></button>)}<button type="button" className="add-room-btn" onClick={() => setRoomEditor({ index: null, value: "" })}><Plus size={16} /> إضافة قاعة</button></div>{roomEditor && <form className="room-editor-form" onSubmit={saveRoom}><label className="field">{roomEditor.index === null ? "اسم القاعة الجديدة" : "تعديل اسم القاعة"}<input autoFocus value={roomEditor.value} onChange={(event) => setRoomEditor({ ...roomEditor, value: event.target.value })} placeholder="مثال: القاعة الكبرى" /></label><div><button type="button" className="secondary-btn" onClick={() => setRoomEditor(null)}>إلغاء</button><button type="submit" className="primary-btn">{roomEditor.index === null ? "إضافة القاعة" : "حفظ الاسم"}</button></div></form>}</div></section><section className="panel settings-section subjects-section"><div className="settings-icon subjects"><BookOpen size={21} /></div><div className="settings-copy"><h3>مواد كل مرحلة</h3><p>المواد هنا تظهر تلقائياً عند إضافة مدرس أو تحديد سعر جديد</p></div><div className="subject-settings"><label className="field">المرحلة<select value={subjectStage} onChange={(event) => setSubjectStage(event.target.value as Stage)}>{stages.map((stage) => <option key={stage}>{stage}</option>)}</select></label><div className="subject-tags">{subjectCatalog[subjectStage].map((subject) => <span key={subject}>{subject}</span>)}</div><form onSubmit={(event) => { event.preventDefault(); const value = newSubject.trim(); if (!value) return; if (subjectCatalog[subjectStage].includes(value)) { showToast("المادة موجودة بالفعل في هذه المرحلة"); return; } setSubjectCatalog((current) => ({ ...current, [subjectStage]: [...current[subjectStage], value] })); setNewSubject(""); showToast("تمت إضافة المادة للمرحلة"); }}><label className="field">مادة جديدة<input value={newSubject} onChange={(event) => setNewSubject(event.target.value)} placeholder="اكتب اسم المادة" /></label><button className="primary-btn" type="submit"><Plus size={17} /> إضافة المادة</button></form></div></section><section className="cloud-card"><ShieldCheck size={26} /><div><h3>قاعدة البيانات السحابية</h3><p>كل تغيير يُحفظ أولاً على الجهاز كنسخة انتظار ثم يُزامن تلقائياً مع Supabase PostgreSQL.</p></div><span>حفظ مزدوج آمن</span></section></div>;
+  return <div className="settings-stack"><section className="panel settings-section"><div className="settings-icon"><LockKeyhole size={21} /></div><div className="settings-copy"><h3>PIN الإدارة</h3><p>تغيير اسم المدير أو رمز الإدارة المكوّن من 4 أرقام</p></div><form onSubmit={saveCredentials}><label className="field">اسم المستخدم<input value={username} minLength={3} onChange={(event) => setUsername(event.target.value)} required /></label><label className="field">PIN جديد — 4 أرقام<input name="newPassword" type="password" inputMode="numeric" minLength={4} maxLength={4} pattern="[0-9]{4}" placeholder="اتركه فارغًا بدون تغيير" /></label><button className="primary-btn" type="submit" disabled={credentialsSaving}>{credentialsSaving ? "جاري الحفظ…" : "حفظ التغييرات"}</button></form></section><section className="panel settings-section recovery-settings"><div className="settings-icon recovery"><ShieldCheck size={21} /></div><div className="settings-copy"><h3>استرداد PIN الإدارة</h3><p>أنشئ كود طوارئ واحفظه خارج الجهاز. يظل ثابتًا وصالحًا حتى تنشئ كودًا جديدًا، والكود الجديد يلغي السابق.</p></div><div className="recovery-actions">{recoveryCode ? <div className="recovery-code-display"><span>احفظ هذا الكود الآن — سيظل صالحًا حتى تغييره</span><code>{recoveryCode}</code><button type="button" className="secondary-btn" onClick={async () => { await navigator.clipboard.writeText(recoveryCode); showToast("تم نسخ كود الاسترداد"); }}>نسخ الكود</button></div> : <button type="button" className="primary-btn" onClick={generateRecoveryCode} disabled={recoveryCodeLoading}>{recoveryCodeLoading ? "جاري الإنشاء…" : "إنشاء كود استرداد"}</button>}</div></section><section className="panel settings-section"><div className="settings-icon rooms"><BookOpen size={21} /></div><div className="settings-copy"><h3>قاعات السنتر</h3><p>القاعات المتاحة عند إنشاء الحصة</p></div><div className="room-manager"><div className="room-settings">{rooms.map((room, index) => <button type="button" className="room-pill" key={`${room}-${index}`} onClick={() => setRoomEditor({ index, value: room })} aria-label={`تعديل اسم ${room}`}><i /><span>{room}</span><Edit3 size={15} /></button>)}<button type="button" className="add-room-btn" onClick={() => setRoomEditor({ index: null, value: "" })}><Plus size={16} /> إضافة قاعة</button></div>{roomEditor && <form className="room-editor-form" onSubmit={saveRoom}><label className="field">{roomEditor.index === null ? "اسم القاعة الجديدة" : "تعديل اسم القاعة"}<input autoFocus value={roomEditor.value} onChange={(event) => setRoomEditor({ ...roomEditor, value: event.target.value })} placeholder="مثال: القاعة الكبرى" /></label><div><button type="button" className="secondary-btn" onClick={() => setRoomEditor(null)}>إلغاء</button><button type="submit" className="primary-btn">{roomEditor.index === null ? "إضافة القاعة" : "حفظ الاسم"}</button></div></form>}</div></section><section className="panel settings-section subjects-section"><div className="settings-icon subjects"><BookOpen size={21} /></div><div className="settings-copy"><h3>مواد كل مرحلة</h3><p>المواد هنا تظهر تلقائياً عند إضافة مدرس أو تحديد سعر جديد</p></div><div className="subject-settings"><label className="field">المرحلة<select value={subjectStage} onChange={(event) => setSubjectStage(event.target.value as Stage)}>{stages.map((stage) => <option key={stage}>{stage}</option>)}</select></label><div className="subject-tags">{subjectCatalog[subjectStage].map((subject) => <span key={subject}>{subject}</span>)}</div><form onSubmit={(event) => { event.preventDefault(); const value = newSubject.trim(); if (!value) return; if (subjectCatalog[subjectStage].includes(value)) { showToast("المادة موجودة بالفعل في هذه المرحلة"); return; } setSubjectCatalog((current) => ({ ...current, [subjectStage]: [...current[subjectStage], value] })); setNewSubject(""); showToast("تمت إضافة المادة للمرحلة"); }}><label className="field">مادة جديدة<input value={newSubject} onChange={(event) => setNewSubject(event.target.value)} placeholder="اكتب اسم المادة" /></label><button className="primary-btn" type="submit"><Plus size={17} /> إضافة المادة</button></form></div></section><section className="cloud-card"><ShieldCheck size={26} /><div><h3>قاعدة البيانات السحابية</h3><p>كل تغيير يُحفظ أولاً على الجهاز كنسخة انتظار ثم يُزامن تلقائياً مع Supabase PostgreSQL.</p></div><span>حفظ مزدوج آمن</span></section></div>;
 }
