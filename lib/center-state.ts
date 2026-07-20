@@ -41,3 +41,22 @@ export function isCenterStatePayload(value: unknown): value is CenterStatePayloa
   if (typeof payload.savedAt !== "string" || Number.isNaN(Date.parse(payload.savedAt))) return false;
   return true;
 }
+
+export function findActiveStudentStateConflict(state: CenterStatePayload) {
+  const activeByStudent = new Map<string, { sessionId: string; subject: string }>();
+  for (const rawSession of state.sessions) {
+    if (!rawSession || typeof rawSession !== "object" || Array.isArray(rawSession)) continue;
+    const session = rawSession as Record<string, unknown>;
+    if (session.status !== "active" || !Array.isArray(session.studentIds)) continue;
+    const sessionId = String(session.id ?? "");
+    const subject = typeof session.subject === "string" ? session.subject : "حصة أخرى";
+    for (const rawStudentId of new Set(session.studentIds.map(String))) {
+      const existing = activeByStudent.get(rawStudentId);
+      if (existing && existing.sessionId !== sessionId) {
+        return { studentId: rawStudentId, firstSession: existing, secondSession: { sessionId, subject } };
+      }
+      activeByStudent.set(rawStudentId, { sessionId, subject });
+    }
+  }
+  return null;
+}

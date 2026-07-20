@@ -66,7 +66,7 @@ export function outstandingForAttendance(session: FinancialSession, studentId: s
 
 export function outstandingForStudent(sessions: FinancialSession[], payments: DebtPaymentRecord[], studentId: string) {
   return sessions
-    .filter((session) => session.status === "ended" && session.studentIds.includes(studentId))
+    .filter((session) => session.studentIds.includes(studentId))
     .reduce((sum, session) => sum + outstandingForAttendance(session, studentId, payments), 0);
 }
 
@@ -81,7 +81,7 @@ export function allocateDebtPayment(
 
   const eligibleSessions = sessions
     .map((session, index) => ({ session, index }))
-    .filter(({ session }) => session.status === "ended" && session.studentIds.includes(studentId))
+    .filter(({ session }) => session.studentIds.includes(studentId))
     .sort((left, right) => {
       const dateOrder = (left.session.date ?? "").localeCompare(right.session.date ?? "");
       return dateOrder || left.index - right.index;

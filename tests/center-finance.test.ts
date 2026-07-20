@@ -38,8 +38,8 @@ test("later debt payments clear only the old attendance balance", () => {
   assert.equal(getSessionFinancials(partialSession).teacherDue, 140);
 });
 
-test("active lessons do not become collectible old debt before ending", () => {
-  assert.equal(outstandingForStudent([{ ...partialSession, status: "active" }], [], "100"), 0);
+test("active lesson shortages appear immediately in the student's debt", () => {
+  assert.equal(outstandingForStudent([{ ...partialSession, status: "active" }], [], "100"), 40);
 });
 
 test("a combined payment clears old lesson debts from oldest to newest", () => {

@@ -467,9 +467,8 @@ export default function CenterApp() {
     setProfileMenuOpen(false);
     setNotificationsOpen(false);
     setMobileNav(false);
-    if (adminUnlocked) {
+    if (adminUnlocked && view === "admin") {
       setAdminTab(tab);
-      setView("admin");
       return;
     }
     setAdminAuthError("");
@@ -481,6 +480,10 @@ export default function CenterApp() {
     if (target === "admin") {
       openAdmin();
       return;
+    }
+    if (adminUnlocked) {
+      setAdminUnlocked(false);
+      void fetch("/api/auth/reception", { method: "POST" }).catch(() => { /* The local admin gate is already locked. */ });
     }
     setView(target);
     setMobileNav(false);
@@ -532,10 +535,10 @@ export default function CenterApp() {
   };
 
   const lockAdmin = async () => {
-    try { await fetch("/api/auth/reception", { method: "POST" }); } catch { /* The local admin gate still locks. */ }
     setAdminUnlocked(false);
     if (view === "admin") setView("dashboard");
     setProfileMenuOpen(false);
+    try { await fetch("/api/auth/reception", { method: "POST" }); } catch { /* The local admin gate still locks. */ }
     showToast("تم قفل صفحة الإدارة");
   };
 
@@ -619,7 +622,8 @@ export default function CenterApp() {
         onClose={() => { setSelectedSession(null); setEndReview(false); setStartReview(false); setEditSessionOpen(false); }}
         onEdit={() => setEditSessionOpen(true)}
         onAddStudent={(studentId, paidAmount, oldDebtPayment) => {
-          const activeConflict = selectedSession.status === "active" ? findActiveStudentConflict(sessions, selectedSession.id, studentId) : undefined;
+          const currentLesson = sessions.find((item) => item.id === selectedSession.id) ?? selectedSession;
+          const activeConflict = currentLesson.status === "active" ? findActiveStudentConflict(sessions, currentLesson.id, studentId) : undefined;
           if (activeConflict) {
             showToast(`لا يمكن الإضافة: الطالب داخل حصة ${activeConflict.subject} في ${activeConflict.room}`);
             return;
@@ -666,7 +670,7 @@ export default function CenterApp() {
 
       {editSessionOpen && selectedSession && <EditSessionModal session={sessions.find((item) => item.id === selectedSession.id) ?? selectedSession} teachers={teachers} pricing={pricing} sessions={sessions} rooms={rooms} onClose={() => setEditSessionOpen(false)} onSave={(updated) => { setSessions((current) => current.map((lesson) => lesson.id === updated.id ? updated : lesson)); setSelectedSession(updated); setAudit((current) => [{ id: String(Date.now()), action: "تعديل حصة", details: `تم تحديث حصة ${updated.subject} — ${updated.date} ${updated.scheduledTime}`, time: "الآن", tone: "blue" }, ...current]); setEditSessionOpen(false); showToast("تم حفظ تعديلات الحصة"); }} />}
 
-      {startReview && selectedSession && <Modal title="بدء الحصة" subtitle="راجع وقت البداية الفعلي قبل التأكيد" onClose={() => setStartReview(false)}><div className="modal-body"><label className="field">وقت البداية<input type="time" value={startTime} onInput={(event) => setStartTime(event.currentTarget.value)} /></label><div className="date-note"><CalendarDays size={18} /><span><strong>{arabicDate()}</strong>يمكنك تعديل الوقت قبل بدء الحصة</span></div></div><div className="modal-actions"><button className="secondary-btn" onClick={() => setStartReview(false)}>إلغاء</button><button className="primary-btn" onClick={() => { const roomBusy = sessions.some((item) => item.id !== selectedSession.id && item.room === selectedSession.room && item.status === "active"); if (roomBusy) { showToast(`${selectedSession.room} فيها حصة شغالة بالفعل`); return; } const studentConflict = selectedSession.studentIds.map((studentId) => ({ studentId, lesson: findActiveStudentConflict(sessions, selectedSession.id, studentId) })).find((item) => item.lesson); if (studentConflict?.lesson) { const student = students.find((item) => item.id === studentConflict.studentId); showToast(`لا يمكن البدء: ${student?.name ?? "طالب"} داخل حصة ${studentConflict.lesson.subject} في ${studentConflict.lesson.room}`); return; } setSessions((current) => current.map((item) => item.id === selectedSession.id ? { ...item, status: "active", startedAt: startTime } : item)); setStartReview(false); showToast("بدأت الحصة وتم تسجيل الوقت"); }}>تأكيد بدء الحصة</button></div></Modal>}
+      {startReview && selectedSession && (() => { const lessonToStart = sessions.find((item) => item.id === selectedSession.id) ?? selectedSession; return <Modal title="بدء الحصة" subtitle="راجع وقت البداية الفعلي قبل التأكيد" onClose={() => setStartReview(false)}><div className="modal-body"><label className="field">وقت البداية<input type="time" value={startTime} onInput={(event) => setStartTime(event.currentTarget.value)} /></label><div className="date-note"><CalendarDays size={18} /><span><strong>{arabicDate()}</strong>يمكنك تعديل الوقت قبل بدء الحصة</span></div></div><div className="modal-actions"><button className="secondary-btn" onClick={() => setStartReview(false)}>إلغاء</button><button className="primary-btn" onClick={() => { const roomBusy = sessions.some((item) => item.id !== lessonToStart.id && item.room === lessonToStart.room && item.status === "active"); if (roomBusy) { showToast(`${lessonToStart.room} فيها حصة شغالة بالفعل`); return; } const studentConflict = lessonToStart.studentIds.map((studentId) => ({ studentId, lesson: findActiveStudentConflict(sessions, lessonToStart.id, studentId) })).find((item) => item.lesson); if (studentConflict?.lesson) { const student = students.find((item) => item.id === studentConflict.studentId); showToast(`لا يمكن البدء: ${student?.name ?? "طالب"} داخل حصة ${studentConflict.lesson.subject} في ${studentConflict.lesson.room}`); return; } setSessions((current) => current.map((item) => item.id === lessonToStart.id ? { ...item, status: "active", startedAt: startTime } : item)); setStartReview(false); showToast("بدأت الحصة وتم تسجيل الوقت"); }}>تأكيد بدء الحصة</button></div></Modal>; })()}
 
       {endReview && selectedSession && (() => { const lesson = sessions.find((item) => item.id === selectedSession.id) ?? selectedSession; const financials = getSessionFinancials(lesson); return <Modal title="إنهاء الحصة" subtitle="مراجعة الحسابات النهائية قبل نقل الحصة للأرشيف" onClose={() => setEndReview(false)} wide><div className="modal-body"><div className="review-banner"><ShieldCheck size={24} /><div><strong>سيتم قفل بيانات الحصة بعد التأكيد</strong><span>أي تعديل لاحق سيتم تسجيله في سجل العمليات</span></div></div><div className="financial-grid session-financial-grid"><div><span>الطلاب الحاضرون</span><strong>{lesson.studentIds.length}</strong></div><div><span>قيمة الحصة كاملة</span><strong>{money(financials.fullTotal)}</strong></div><div className={financials.shortages ? "shortage-card" : ""}><span>النواقص</span><strong>{money(financials.shortages)}</strong></div><div><span>المحصل بعد النواقص</span><strong>{money(financials.collected)}</strong></div><div><span>مستحق المدرس</span><strong>{money(financials.teacherDue)}</strong></div><div className="highlight"><span>صافي السنتر</span><strong>{money(financials.centerNet)}</strong></div></div></div><div className="modal-actions"><button className="secondary-btn" onClick={() => setEndReview(false)}>رجوع للحصة</button><button className="danger-confirm" onClick={() => { const end = new Date().toTimeString().slice(0, 5); setSessions((current) => current.map((item) => item.id === lesson.id ? { ...item, status: "ended", endedAt: end } : item)); setAudit((current) => [{ id: String(Date.now()), action: "إنهاء حصة", details: `تم إنهاء حصة ${lesson.subject} — صافي السنتر ${money(financials.centerNet)}`, time: "الآن", tone: "green" }, ...current]); setEndReview(false); setSelectedSession(null); showToast("تم إنهاء الحصة ونقلها للأرشيف"); }}>تأكيد وإنهاء الحصة</button></div></Modal>; })()}
 
@@ -715,7 +719,7 @@ function StudentsPage({ tab, setTab, students, setStudents, teachers, bookings, 
   const [registerStage, setRegisterStage] = useState<Stage>("المرحلة الإعدادية");
   const [editStage, setEditStage] = useState<Stage>("المرحلة الإعدادية");
   const filtered = students.filter((student) => student.active && [student.id, student.name, student.phone].some((value) => value.toLowerCase().includes(query.toLowerCase()))).slice().sort(newestNumericIdFirst);
-  const debtsForStudent = (studentId: string) => sessions.filter((lesson) => lesson.status === "ended" && lesson.studentIds.includes(studentId) && outstandingForAttendance(lesson, studentId, debtPayments) > 0).slice().sort(newestSessionFirst);
+  const debtsForStudent = (studentId: string) => sessions.filter((lesson) => lesson.studentIds.includes(studentId) && outstandingForAttendance(lesson, studentId, debtPayments) > 0).slice().sort(newestSessionFirst);
   const studentsWithDebt = students.filter((student) => outstandingForStudent(sessions, debtPayments, student.id) > 0 && [student.id, student.name, student.phone].some((value) => value.toLowerCase().includes(query.toLowerCase()))).slice().sort((left, right) => outstandingForStudent(sessions, debtPayments, right.id) - outstandingForStudent(sessions, debtPayments, left.id));
   const selectedDebtStudent = settlingDebt ? students.find((student) => student.id === settlingDebt.studentId) : undefined;
   const selectedDebtSessions = selectedDebtStudent ? debtsForStudent(selectedDebtStudent.id) : [];

@@ -1,4 +1,4 @@
-import { emptyCenterState, isCenterStatePayload } from "../../../lib/center-state";
+import { emptyCenterState, findActiveStudentStateConflict, isCenterStatePayload } from "../../../lib/center-state";
 import { sessionFromRequest } from "../../../lib/server-auth";
 import { supabaseInsert, supabaseQuery, supabaseUpdate } from "../../../lib/supabase-rest";
 
@@ -29,6 +29,10 @@ export async function PUT(request: Request) {
     const currentRows = await supabaseQuery<StateRow>("center_state", { select: "id,data,version,updated_at", id: "eq.1", limit: 1 });
     const current = currentRows[0];
     const currentVersion = current?.version ?? 0;
+    const studentConflict = findActiveStudentStateConflict(body.state);
+    if (studentConflict) {
+      return Response.json({ ok: false, error: `الطالب ${studentConflict.studentId} مسجل بالفعل في حصة شغالة أخرى`, conflict: true, state: current?.data ?? emptyCenterState, version: currentVersion }, { status: 409 });
+    }
     if (body.baseVersion !== currentVersion) {
       return Response.json({ ok: false, error: "تم تعديل البيانات من جهاز آخر", conflict: true, state: current?.data ?? emptyCenterState, version: currentVersion }, { status: 409 });
     }
