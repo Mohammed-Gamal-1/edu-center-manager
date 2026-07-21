@@ -50,6 +50,7 @@ import {
   shortageForAttendance,
 } from "../lib/center-finance";
 import { findActiveStudentConflict, hasMatchingBooking, isStudentInSessionGrade, nextStudentIdForStage } from "../lib/center-rules";
+import { downloadAnalyticsExcel, type AnalyticsExcelExport } from "../lib/analytics-excel";
 
 type View = "dashboard" | "students" | "teachers" | "sessions" | "expenses" | "admin";
 type StudentTab = "register" | "bookings" | "records" | "debts";
@@ -1014,6 +1015,33 @@ function AnalyticsPanel({ sessions, bookings, expenses, debtPayments, teachers }
   const [subjectFilter, setSubjectFilter] = useState("all");
   const [stageFilter, setStageFilter] = useState<"all" | Stage>("all");
   const [gradeFilter, setGradeFilter] = useState("all");
+  const excelExportRef = useRef<AnalyticsExcelExport | null>(null);
+  useEffect(() => {
+    const panel = document.querySelector<HTMLElement>(".analytics-control-panel");
+    if (!panel || panel.querySelector("[data-analytics-export]")) return;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "analytics-export-btn";
+    button.dataset.analyticsExport = "true";
+    button.textContent = "تحميل Excel";
+    button.setAttribute("aria-label", "تحميل الإحصائيات الحالية في ملف Excel");
+    button.addEventListener("click", async () => {
+      const exportData = excelExportRef.current;
+      if (!exportData || button.disabled) return;
+      button.disabled = true;
+      button.textContent = "جاري تجهيز Excel…";
+      try {
+        await downloadAnalyticsExcel(exportData);
+        button.textContent = "تم التحميل ✓";
+      } catch {
+        button.textContent = "تعذر التحميل — حاول مرة أخرى";
+      } finally {
+        window.setTimeout(() => { button.disabled = false; button.textContent = "تحميل Excel"; }, 1800);
+      }
+    });
+    panel.appendChild(button);
+    return () => button.remove();
+  }, []);
   const ended = sessions.filter((lesson) => lesson.status === "ended");
   const now = new Date();
   const matchesPeriod = (date: string) => {
@@ -1098,6 +1126,45 @@ function AnalyticsPanel({ sessions, bookings, expenses, debtPayments, teachers }
   const maxStage = Math.max(...byStage.map((item) => item.value), 1);
   const resetFilters = () => { setTeacherFilter("all"); setSubjectFilter("all"); setStageFilter("all"); setGradeFilter("all"); };
   const periodLabel = period === "custom" ? (customDateTo && customDateTo !== customDateFrom ? `من ${customDateFrom} إلى ${customDateTo}` : `يوم ${customDateFrom}`) : { today: "اليوم", week: "آخر 7 أيام", month: "هذا الشهر", all: "كل الفترات" }[period];
+  const excelExportData: AnalyticsExcelExport = {
+    periodLabel,
+    filters: {
+      teacher: teacherFilter === "all" ? "كل المدرسين" : teachers.find((teacher) => teacher.id === teacherFilter)?.name ?? "مدرس مؤرشف",
+      subject: subjectFilter === "all" ? "كل المواد" : subjectFilter,
+      stage: stageFilter === "all" ? "كل المراحل" : stageFilter,
+      grade: gradeFilter === "all" ? "كل الصفوف" : gradeFilter,
+    },
+    summary: [
+      ["الحصص المنتهية", filtered.length, "حصة"],
+      ["إجمالي الحضور", attendance, "حضور"],
+      ["القيمة الكاملة للحصص", fullSessionValue, "ج.م"],
+      ["نواقص الحصص", sessionShortages, "ج.م"],
+      ["المحصل من الحصص", sessionGross, "ج.م"],
+      ["إيراد الحجوزات المسبقة", bookingRevenue, "ج.م"],
+      ["تحصيل المديونيات", debtRecovery, "ج.م"],
+      ["إجمالي الإيرادات", gross, "ج.م"],
+      ["مستحقات المدرسين", teacherDue, "ج.م"],
+      ["مصروفات السنتر", expenseTotal, "ج.م"],
+      ["صافي ربح السنتر", net, "ج.م"],
+      ["هامش السنتر", margin, "٪"],
+      ["متوسط الحضور للحصة", averageAttendance, "طالب"],
+      ["متوسط الإيراد", averageRevenue, "ج.م"],
+    ],
+    sessions: filtered.slice().sort((left, right) => right.date.localeCompare(left.date)).map((lesson) => {
+      const financials = getSessionFinancials(lesson);
+      return [lesson.date, teachers.find((teacher) => teacher.id === lesson.teacherId)?.name ?? "مدرس مؤرشف", lesson.stage, lesson.grade, lesson.subject, lesson.room, lesson.studentIds.length, financials.fullTotal, financials.shortages, financials.collected, financials.teacherDue, financials.centerNet, financials.collected ? financials.centerNet / financials.collected : 0];
+    }),
+    teachers: teacherRank.map((item, index) => [index + 1, item.teacher.name, item.sessions, item.bookings, item.attendance, item.revenue]),
+    subjects: bySubject.map((item) => [item.label, item.value]),
+    stages: byStage.map((item) => [item.label, item.value]),
+    monthly: monthlyAnalysis.map((month) => [month.label, month.sessions, month.bookings, month.attendance, month.gross, month.teacherDue, month.expenses, month.net, month.gross ? month.net / month.gross : 0]),
+    bookings: filteredBookings.map((booking) => [booking.createdAt, booking.studentId, teachers.find((teacher) => teacher.id === booking.teacherId)?.name ?? "مدرس مؤرشف", `${booking.stage} — ${booking.grade}`, booking.subject, booking.bookingFee]),
+    expenses: filteredExpenses.map((expense) => [expense.date, expense.category, expense.description, expense.amount]),
+    debtPayments: filteredDebtPayments.map((payment) => [payment.date, payment.studentId, payment.sessionId, payment.amount]),
+  };
+  useEffect(() => {
+    excelExportRef.current = excelExportData;
+  });
   return <div className="analytics-stack"><section className="panel analytics-control-panel"><div><span className="section-kicker">نطاق التحليل</span><h2>إحصائيات {periodLabel}</h2></div><div className="analytics-period-wrap"><div className="analytics-period">{([{ id: "today", label: "اليوم" }, { id: "week", label: "7 أيام" }, { id: "month", label: "الشهر" }, { id: "all", label: "الكل" }, { id: "custom", label: "تاريخ مخصص" }] as const).map((item) => <button key={item.id} className={period === item.id ? "active" : ""} onClick={() => setPeriod(item.id)}>{item.label}</button>)}</div>{period === "custom" && <div className="analytics-custom-range"><label><span>من / يوم معين</span><input type="date" value={customDateFrom} onInput={(event) => { const value = event.currentTarget.value; setCustomDateFrom(value); if (customDateTo && value > customDateTo) setCustomDateTo(""); }} /></label><label><span>إلى (اختياري)</span><input type="date" min={customDateFrom} value={customDateTo} onInput={(event) => setCustomDateTo(event.currentTarget.value)} /></label></div>}</div></section><section className="panel analytics-filter-panel"><div className="analytics-filter-head"><div><h3>فلترة التحليل والجدول</h3><p>كل المؤشرات والرسوم والجدول تتحدث مع الفلاتر</p></div>{(teacherFilter !== "all" || subjectFilter !== "all" || stageFilter !== "all" || gradeFilter !== "all") && <button className="clear-filters" onClick={resetFilters}><X size={16} /> مسح الفلاتر</button>}</div><div className="analytics-filter-grid"><label className="field">المدرس<select value={teacherFilter} onChange={(event) => setTeacherFilter(event.target.value)}><option value="all">كل المدرسين</option>{teachers.map((teacher) => <option value={teacher.id} key={teacher.id}>{teacher.name}</option>)}</select></label><label className="field">المادة<select value={subjectFilter} onChange={(event) => setSubjectFilter(event.target.value)}><option value="all">كل المواد</option>{subjectOptions.map((subject) => <option key={subject}>{subject}</option>)}</select></label><label className="field">المرحلة<select value={stageFilter} onChange={(event) => { setStageFilter(event.target.value as "all" | Stage); setGradeFilter("all"); }}><option value="all">كل المراحل</option>{stages.map((stage) => <option key={stage}>{stage}</option>)}</select></label><label className="field">الصف<select value={gradeFilter} onChange={(event) => setGradeFilter(event.target.value)}><option value="all">كل الصفوف</option>{gradeOptions.map((grade) => <option key={grade}>{grade}</option>)}</select></label></div></section><div className="analytics-kpi-grid"><article><span><CalendarDays size={20} /></span><div><small>الحصص المنتهية</small><strong>{filtered.length}</strong><em>{periodLabel}</em></div></article><article><span><Users size={20} /></span><div><small>إجمالي الحضور</small><strong>{attendance}</strong><em>كل حضور محسوب</em></div></article><article><span><CircleDollarSign size={20} /></span><div><small>إجمالي الإيرادات</small><strong>{money(gross)}</strong><em>المحصل من الحصص + الحجوزات + سداد المديونيات</em></div></article><article><span><BookOpen size={20} /></span><div><small>إيراد الحجوزات المسبقة</small><strong>{money(bookingRevenue)}</strong><em>{filteredBookings.length} حجز ضمن الفترة</em></div></article><article className="shortage-kpi"><span><WalletCards size={20} /></span><div><small>نواقص الحصص</small><strong>{money(sessionShortages)}</strong><em>من قيمة كاملة {money(fullSessionValue)}</em></div></article><article><span><CircleDollarSign size={20} /></span><div><small>تحصيل مديونيات سابقة</small><strong>{money(debtRecovery)}</strong><em>{filteredDebtPayments.length} عملية سداد ضمن الفترة</em></div></article><article><span><WalletCards size={20} /></span><div><small>مستحقات المدرسين</small><strong>{money(teacherDue)}</strong><em>عن الطلاب الحاضرين</em></div></article><article className="expense-kpi"><span><ReceiptText size={20} /></span><div><small>مصروفات السنتر</small><strong>{money(expenseTotal)}</strong><em>{filteredExpenses.length} مصروف ضمن الفترة</em></div></article><article className="net-card"><span><TrendingUp size={20} /></span><div><small>صافي ربح السنتر</small><strong>{money(net)}</strong><em>هامش {margin.toFixed(1)}٪</em></div></article><article><span><BarChart3 size={20} /></span><div><small>متوسط الحضور / حصة</small><strong>{averageAttendance.toFixed(1)}</strong><em>متوسط الإيراد {money(averageRevenue)}</em></div></article></div><div className="analytics-grid"><section className="panel"><div className="panel-head"><div><span className="section-kicker">مقارنة المواد</span><h2>الدخل حسب المادة</h2></div></div>{bySubject.length ? <div className="horizontal-chart">{bySubject.map((item) => <div key={item.label}><span>{item.label}</span><div><i style={{ width: `${(item.value / maxSubject) * 100}%` }} /></div><strong>{money(item.value)}</strong></div>)}</div> : <EmptyState icon={<BarChart3 />} title="لا توجد بيانات" text="غيّر الفلاتر لعرض المقارنة" />}</section><section className="panel"><div className="panel-head"><div><span className="section-kicker">مقارنة المراحل</span><h2>الدخل حسب المرحلة</h2></div></div>{byStage.length ? <div className="horizontal-chart stage-chart">{byStage.map((item) => <div key={item.label}><span>{item.label}</span><div><i style={{ width: `${(item.value / maxStage) * 100}%` }} /></div><strong>{money(item.value)}</strong></div>)}</div> : <EmptyState icon={<GraduationCap />} title="لا توجد بيانات" text="لا توجد حصص منتهية ضمن الاختيار" />}</section></div><section className="panel"><div className="panel-head"><div><span className="section-kicker">أداء المدرسين</span><h2>ترتيب المدرسين حسب قيمة الحصص</h2></div></div>{teacherRank.length ? <div className="ranking-list wide-ranking">{teacherRank.map((item, index) => <div key={item.teacher.id}><b>{index + 1}</b><span>{item.teacher.name.replace("أ/ ", "").charAt(0)}</span><div><strong>{item.teacher.name}</strong><small>{item.sessions} حصة · {item.bookings} حجز · {item.attendance} حضور</small></div><em>{money(item.revenue)}</em></div>)}</div> : <EmptyState icon={<GraduationCap />} title="لا توجد نتائج للمدرسين" text="غيّر الفترة أو الفلاتر" />}</section><section className="panel data-panel monthly-analysis-panel"><div className="data-toolbar"><div><span className="section-kicker">تحليل شهري</span><h2>مقارنة أداء الشهور</h2><p>يتأثر بفلاتر المدرس والمادة والمرحلة والصف، ويعرض كل الشهور المسجلة</p></div></div>{monthlyAnalysis.length ? <div className="table-wrap"><table><thead><tr><th>الشهر</th><th>الحصص</th><th>الحجوزات</th><th>الحضور</th><th>إجمالي الدخل</th><th>مستحق المدرسين</th><th>المصروفات</th><th>صافي السنتر</th><th>هامش السنتر</th></tr></thead><tbody>{monthlyAnalysis.map((month) => <tr key={month.key}><td><strong>{month.label}</strong></td><td>{month.sessions}</td><td>{month.bookings}</td><td>{month.attendance}</td><td>{money(month.gross)}</td><td>{money(month.teacherDue)}</td><td><span className="expense-amount">{money(month.expenses)}</span></td><td><span className="profit-tag">{money(month.net)}</span></td><td>{month.gross ? ((month.net / month.gross) * 100).toFixed(1) : "0.0"}٪</td></tr>)}</tbody></table></div> : <EmptyState icon={<CalendarDays />} title="لا توجد بيانات شهرية" text="ستظهر مقارنة الشهور بعد إنهاء الحصص" />}</section><section className="panel data-panel analysis-table-panel"><div className="data-toolbar"><div><h2>جدول تحليل الحصص</h2><p>{filtered.length} حصة · يمكنك تغيير النتائج من الفلاتر بالأعلى</p></div></div>{filtered.length ? <div className="table-wrap"><table><thead><tr><th>التاريخ</th><th>المدرس</th><th>المرحلة والصف</th><th>المادة</th><th>الحضور</th><th>القيمة الكاملة</th><th>النواقص</th><th>المحصل</th><th>مستحق المدرس</th><th>صافي السنتر</th><th>الهامش</th></tr></thead><tbody>{filtered.slice().sort((a, b) => b.date.localeCompare(a.date)).map((lesson) => { const lessonFinancials = getSessionFinancials(lesson); const lessonGross = lessonFinancials.collected; const lessonTeacherDue = lessonFinancials.teacherDue; const lessonNet = lessonFinancials.centerNet; return <tr key={lesson.id}><td><strong>{lesson.date}</strong><small>{lesson.startedAt}–{lesson.endedAt}</small></td><td>{teachers.find((teacher) => teacher.id === lesson.teacherId)?.name ?? "مدرس مؤرشف"}</td><td><strong>{lesson.stage}</strong><small>{lesson.grade}</small></td><td>{lesson.subject}</td><td><span className="attendance-badge">{lesson.studentIds.length} طالب</span></td><td>{money(lessonFinancials.fullTotal)}</td><td><span className={lessonFinancials.shortages ? "debt-amount" : ""}>{money(lessonFinancials.shortages)}</span></td><td>{money(lessonGross)}</td><td>{money(lessonTeacherDue)}</td><td><span className="profit-tag">{money(lessonNet)}</span></td><td>{lessonGross ? ((lessonNet / lessonGross) * 100).toFixed(1) : "0.0"}٪</td></tr>; })}</tbody><tfoot><tr><td colSpan={4}>إجمالي النتائج</td><td>{attendance} حضور</td><td>{money(fullSessionValue)}</td><td>{money(sessionShortages)}</td><td>{money(sessionGross)}</td><td>{money(teacherDue)}</td><td>{money(sessionGross - teacherDue)}</td><td>{sessionGross ? (((sessionGross - teacherDue) / sessionGross) * 100).toFixed(1) : "0.0"}٪</td></tr></tfoot></table></div> : <EmptyState icon={<BarChart3 />} title="لا توجد حصص مطابقة" text="غيّر الفترة أو أحد الفلاتر بالأعلى" />}</section><section className="insight-banner"><span><Sparkles size={24} /></span><div><strong>ملخص التحليل</strong><p>{filtered.length || filteredBookings.length || filteredExpenses.length || filteredDebtPayments.length ? `${bySubject[0]?.label ?? "—"} هي الأعلى في الإيرادات، و${teacherRank[0]?.teacher.name ?? "—"} في صدارة المدرسين. الحجوزات أضافت ${money(bookingRevenue)} وتحصيل المديونيات أضاف ${money(debtRecovery)} والمصروفات خفّضت الصافي بمقدار ${money(expenseTotal)}؛ صافي السنتر النهائي ${money(net)}.` : "لا توجد بيانات كافية ضمن الفلاتر الحالية. جرّب توسيع الفترة أو مسح الفلاتر."}</p></div></section></div>;
 }
 
