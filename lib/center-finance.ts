@@ -37,6 +37,13 @@ export function normalizePaidAmount(value: unknown, fullPrice: number) {
   return Math.min(safeFullPrice, Math.max(0, numericValue));
 }
 
+export function normalizeAttendancePaymentTotal(value: unknown, lessonPrice: number, oldDebt: number) {
+  const maximum = Math.max(0, lessonPrice) + Math.max(0, oldDebt);
+  const numericValue = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(numericValue)) return 0;
+  return Math.min(maximum, Math.max(0, numericValue));
+}
+
 export function paidDuringSession(session: FinancialSession, studentId: string) {
   const recorded = session.studentPayments?.[studentId];
   return normalizePaidAmount(recorded === undefined ? session.studentPrice : recorded, session.studentPrice);

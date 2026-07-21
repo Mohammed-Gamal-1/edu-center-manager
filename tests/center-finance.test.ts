@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   allocateDebtPayment,
   getSessionFinancials,
+  normalizeAttendancePaymentTotal,
   outstandingForAttendance,
   outstandingForStudent,
   paidDuringSession,
@@ -19,6 +20,12 @@ const partialSession = {
 
 test("defaults an unrecorded attendance to fully paid", () => {
   assert.equal(paidDuringSession({ ...partialSession, studentPayments: undefined }, "100"), 100);
+});
+
+test("manual attendance payment cannot exceed lesson price without old debt", () => {
+  assert.equal(normalizeAttendancePaymentTotal(50, 25, 0), 25);
+  assert.equal(normalizeAttendancePaymentTotal(100, 25, 15), 40);
+  assert.equal(normalizeAttendancePaymentTotal(-5, 25, 0), 0);
 });
 
 test("shortage reduces center cash but never teacher compensation", () => {

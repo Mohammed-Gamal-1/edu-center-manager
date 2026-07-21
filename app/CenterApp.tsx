@@ -42,6 +42,7 @@ import {
   allocateDebtPayment,
   DebtPaymentRecord,
   getSessionFinancials,
+  normalizeAttendancePaymentTotal,
   normalizePaidAmount,
   outstandingForAttendance,
   outstandingForStudent,
@@ -866,7 +867,7 @@ function SessionModal({ session, allSessions, debtPayments, bookings, students, 
   const financials = getSessionFinancials(session);
   const pendingOldDebt = pendingStudent ? outstandingForStudent(allSessions, debtPayments, pendingStudent.id) : 0;
   const combinedTotal = session.studentPrice + pendingOldDebt;
-  const enteredTotal = payFull ? session.studentPrice : Math.min(combinedTotal, Math.max(0, Number(paidAmount) || 0));
+  const enteredTotal = payFull ? session.studentPrice : normalizeAttendancePaymentTotal(paidAmount, session.studentPrice, pendingOldDebt);
   const currentLessonPaid = Math.min(session.studentPrice, enteredTotal);
   const oldDebtPaid = Math.min(pendingOldDebt, Math.max(0, enteredTotal - session.studentPrice));
   const currentLessonRemaining = Math.max(0, session.studentPrice - currentLessonPaid);
@@ -887,6 +888,10 @@ function SessionModal({ session, allSessions, debtPayments, bookings, students, 
   };
   const confirmAttendance = () => {
     if (!pendingStudent) return;
+    if (!payFull && Number(paidAmount) > combinedTotal) {
+      setStudentError(`الحد الأقصى للمبلغ هو ${money(combinedTotal)}`);
+      return;
+    }
     if (!pendingHasBooking && registerBookingNow && (bookingFee === "" || Number(bookingFee) < 0)) {
       setStudentError("أدخل قيمة صحيحة للحجز المسبق");
       return;
@@ -918,7 +923,7 @@ function SessionModal({ session, allSessions, debtPayments, bookings, students, 
           <div><span>المبلغ القديم على الطالب</span><strong>{money(pendingOldDebt)}</strong></div>
           <div className="payment-debt-total"><span>الإجمالي لسداد الكل</span><strong>{money(combinedTotal)}</strong></div>
         </div>}
-        {!payFull && <label className="field payment-amount">إجمالي المبلغ المدفوع الآن<input autoFocus type="number" min="0" max={combinedTotal} step="0.01" value={paidAmount} onChange={(event) => setPaidAmount(event.target.value)} placeholder="اكتب إجمالي المبلغ الذي دفعه الطالب" /><small>{currentLessonRemaining > 0 ? `متبقي من الحصة الحالية: ${money(currentLessonRemaining)}` : oldDebtPaid > 0 ? `سيتم خصم ${money(oldDebtPaid)} من القديم، والمتبقي القديم ${money(oldDebtRemaining)}` : pendingOldDebt > 0 ? `الحصة الحالية مسددة، والمتبقي القديم ${money(oldDebtRemaining)}` : "تم سداد سعر الحصة بالكامل"}</small>{pendingOldDebt > 0 && oldDebtRemaining === 0 && currentLessonRemaining === 0 && <em className="debt-cleared-note"><Check size={15} /> سيتم سداد المديونية بالكامل وإزالة الطالب من قائمة «طلاب عليهم مبالغ»</em>}</label>}
+        {!payFull && <label className="field payment-amount">إجمالي المبلغ المدفوع الآن<input autoFocus type="number" min="0" max={combinedTotal} step="0.01" value={paidAmount} onChange={(event) => { const value = event.target.value; if (value === "") { setPaidAmount(""); setStudentError(""); return; } const numeric = Number(value); if (numeric > combinedTotal) { setPaidAmount(String(combinedTotal)); setStudentError(`لا يمكن إدخال أكثر من ${money(combinedTotal)}${pendingOldDebt > 0 ? " شامل المديونية القديمة" : " وهو سعر الحصة"}`); return; } setPaidAmount(numeric < 0 ? "0" : value); setStudentError(""); }} placeholder="اكتب إجمالي المبلغ الذي دفعه الطالب" /><small>{currentLessonRemaining > 0 ? `متبقي من الحصة الحالية: ${money(currentLessonRemaining)}` : oldDebtPaid > 0 ? `سيتم خصم ${money(oldDebtPaid)} من القديم، والمتبقي القديم ${money(oldDebtRemaining)}` : pendingOldDebt > 0 ? `الحصة الحالية مسددة، والمتبقي القديم ${money(oldDebtRemaining)}` : "تم سداد سعر الحصة بالكامل"}</small>{pendingOldDebt > 0 && oldDebtRemaining === 0 && currentLessonRemaining === 0 && <em className="debt-cleared-note"><Check size={15} /> سيتم سداد المديونية بالكامل وإزالة الطالب من قائمة «طلاب عليهم مبالغ»</em>}</label>}
         <div className="teacher-protection-note"><ShieldCheck size={18} /><span>مستحق المدرس يظل {money(session.teacherFee)} عن هذا الطالب سواء دفع كامل أو ناقص. أي سداد زائد عن سعر الحصة يخص المديونية القديمة فقط.</span></div>
       </div>
       <div className="modal-actions"><button className="secondary-btn" onClick={() => setPendingStudent(null)}>إلغاء</button><button className="primary-btn" onClick={confirmAttendance} disabled={!payFull && paidAmount === ""}>تأكيد وإضافة الطالب</button></div>
