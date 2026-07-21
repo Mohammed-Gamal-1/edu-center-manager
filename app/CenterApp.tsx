@@ -621,7 +621,7 @@ export default function CenterApp() {
         teacherName={teacherName(sessions.find((item) => item.id === selectedSession.id)?.teacherId ?? selectedSession.teacherId)}
         onClose={() => { setSelectedSession(null); setEndReview(false); setStartReview(false); setEditSessionOpen(false); }}
         onEdit={() => setEditSessionOpen(true)}
-        onAddStudent={(studentId, paidAmount, oldDebtPayment) => {
+        onAddStudent={(studentId, paidAmount, oldDebtPayment, advanceBookingFee) => {
           const currentLesson = sessions.find((item) => item.id === selectedSession.id) ?? selectedSession;
           const activeConflict = currentLesson.status === "active" ? findActiveStudentConflict(sessions, currentLesson.id, studentId) : undefined;
           if (activeConflict) {
@@ -658,7 +658,28 @@ export default function CenterApp() {
               tone: "green",
             }, ...current]);
           }
-          if (appliedOldDebt >= oldDebtBefore && oldDebtBefore > 0) showToast("تمت إضافة الطالب وسداد المديونية القديمة بالكامل");
+          if (advanceBookingFee !== null && !hasMatchingBooking(bookings, currentLesson, studentId)) {
+            setBookings((current) => [{
+              id: String(Math.max(0, ...current.map((booking) => Number(booking.id)).filter(Number.isFinite)) + 1),
+              studentId,
+              teacherId: currentLesson.teacherId,
+              stage: currentLesson.stage,
+              grade: currentLesson.grade,
+              subject: currentLesson.subject,
+              bookingFee: advanceBookingFee,
+              createdAt: todayIso(),
+              active: true,
+            }, ...current]);
+            setAudit((current) => [{
+              id: String(Date.now() + 1),
+              action: "حجز مسبق من داخل الحصة",
+              details: `تم تسجيل ${student?.name ?? `الطالب ${studentId}`} مسبقاً في ${currentLesson.subject} مع ${teacherName(currentLesson.teacherId)} بقيمة ${money(advanceBookingFee)}`,
+              time: "الآن",
+              tone: "green",
+            }, ...current]);
+          }
+          if (advanceBookingFee !== null) showToast("تمت إضافة الطالب للحصة وتسجيل الحجز المسبق وقيمته");
+          else if (appliedOldDebt >= oldDebtBefore && oldDebtBefore > 0) showToast("تمت إضافة الطالب وسداد المديونية القديمة بالكامل");
           else if (appliedOldDebt > 0) showToast(`تمت إضافة الطالب وخصم ${money(appliedOldDebt)} من مديونيته القديمة`);
           else showToast(paidAmount < selectedSession.studentPrice ? "تمت إضافة الطالب وتسجيل المبلغ المتبقي عليه" : "تمت إضافة الطالب للحصة كدفع كامل");
         }}
@@ -833,11 +854,13 @@ function EditSessionModal({ session, teachers, pricing, sessions, rooms, onClose
   return <Modal title="تعديل بيانات الحصة" subtitle={`${session.id} · التغييرات تُسجل في سجل العمليات`} onClose={onClose} wide><form className="modal-body entity-form" onSubmit={submit}><label className="field full">المدرس<select value={teacherId} onChange={(event) => { setTeacherId(event.target.value); setAssignmentIndex(0); }}>{teachers.filter((item) => item.active || item.id === session.teacherId).map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label><label className="field full">المرحلة والصف والمادة<select value={assignmentIndex} onChange={(event) => setAssignmentIndex(Number(event.target.value))}>{teacher?.assignments.map((item, index) => <option key={`${item.stage}-${item.grade}-${item.subject}`} value={index}>{item.stage} — {item.grade} — {item.subject}</option>)}</select></label><label className="field">التاريخ<input type="date" value={date} onInput={(event) => setDate(event.currentTarget.value)} required /></label><label className="field">الساعة<input type="time" value={time} onInput={(event) => setTime(event.currentTarget.value)} required /></label><label className="field full">القاعة<select value={room} onChange={(event) => setRoom(event.target.value)}>{rooms.map((item) => <option key={item}>{item}</option>)}</select></label><div className="price-preview full"><div><span>سعر الطالب بعد التعديل</span><strong>{money(rule?.studentPrice ?? session.studentPrice)}</strong></div><div><span>أجر المدرس / طالب</span><strong>{money(rule?.teacherFee ?? session.teacherFee)}</strong></div></div>{conflictError && <div className="form-error full">{conflictError}</div>}<div className="modal-actions full"><button type="button" className="secondary-btn" onClick={onClose}>إلغاء</button><button className="primary-btn" type="submit">حفظ تعديلات الحصة</button></div></form></Modal>;
 }
 
-function SessionModal({ session, allSessions, debtPayments, bookings, students, teacherName, onClose, onEdit, onAddStudent, onRemoveStudent, onStart, onPostpone, onEnd }: { session: LessonSession; allSessions: LessonSession[]; debtPayments: DebtPayment[]; bookings: Booking[]; students: Student[]; teacherName: string; onClose: () => void; onEdit: () => void; onAddStudent: (id: string, paidAmount: number, oldDebtPayment: number) => void; onRemoveStudent: (id: string) => void; onStart: () => void; onPostpone: () => void; onEnd: () => void }) {
+function SessionModal({ session, allSessions, debtPayments, bookings, students, teacherName, onClose, onEdit, onAddStudent, onRemoveStudent, onStart, onPostpone, onEnd }: { session: LessonSession; allSessions: LessonSession[]; debtPayments: DebtPayment[]; bookings: Booking[]; students: Student[]; teacherName: string; onClose: () => void; onEdit: () => void; onAddStudent: (id: string, paidAmount: number, oldDebtPayment: number, advanceBookingFee: number | null) => void; onRemoveStudent: (id: string) => void; onStart: () => void; onPostpone: () => void; onEnd: () => void }) {
   const [query, setQuery] = useState("");
   const [pendingStudent, setPendingStudent] = useState<Student | null>(null);
   const [payFull, setPayFull] = useState(true);
   const [paidAmount, setPaidAmount] = useState(String(session.studentPrice));
+  const [registerBookingNow, setRegisterBookingNow] = useState(false);
+  const [bookingFee, setBookingFee] = useState("");
   const [studentError, setStudentError] = useState("");
   const candidates = students.filter((student) => student.active && isStudentInSessionGrade(student, session) && !session.studentIds.includes(student.id) && query && [student.name, student.phone, student.id].some((value) => value.includes(query))).slice(0, 4);
   const financials = getSessionFinancials(session);
@@ -859,10 +882,16 @@ function SessionModal({ session, allSessions, debtPayments, bookings, students, 
     setPendingStudent(student);
     setPayFull(true);
     setPaidAmount(String(session.studentPrice));
+    setRegisterBookingNow(false);
+    setBookingFee("");
   };
   const confirmAttendance = () => {
     if (!pendingStudent) return;
-    onAddStudent(pendingStudent.id, currentLessonPaid, oldDebtPaid);
+    if (!pendingHasBooking && registerBookingNow && (bookingFee === "" || Number(bookingFee) < 0)) {
+      setStudentError("أدخل قيمة صحيحة للحجز المسبق");
+      return;
+    }
+    onAddStudent(pendingStudent.id, currentLessonPaid, oldDebtPaid, !pendingHasBooking && registerBookingNow ? Number(bookingFee) : null);
     setPendingStudent(null);
     setQuery("");
   };
@@ -878,6 +907,8 @@ function SessionModal({ session, allSessions, debtPayments, bookings, students, 
     {pendingStudent && <Modal title="تسجيل دفع الطالب" subtitle={`${pendingStudent.name} — سعر الحصة ${money(session.studentPrice)}`} onClose={() => setPendingStudent(null)}>
       <div className="modal-body">
         <div className={`booking-check-note ${pendingHasBooking ? "booked" : "not-booked"}`}>{pendingHasBooking ? <Check size={18} /> : <BookOpen size={18} />}<div><strong>{pendingHasBooking ? "الطالب حاجز هذه المادة" : "الطالب غير حاجز هذه المادة"}</strong><small>{session.subject} مع {teacherName} — {session.grade}</small></div></div>
+        {!pendingHasBooking && <div className={`inline-booking-option ${registerBookingNow ? "selected" : ""}`}><label><input type="checkbox" checked={registerBookingNow} onChange={(event) => { setRegisterBookingNow(event.target.checked); setStudentError(""); }} /><span><strong>تسجيل الطالب مسبقاً الآن</strong><small>سيظهر الحجز فوراً في قسم الحجوزات المسبقة ويُضاف دخله للحسابات.</small></span></label>{registerBookingNow && <label className="field booking-fee-field">قيمة الحجز المسبق<input type="number" min="0" step="0.01" value={bookingFee} onChange={(event) => { setBookingFee(event.target.value); setStudentError(""); }} placeholder="اكتب قيمة الحجز" autoFocus required /></label>}</div>}
+        {studentError && <div className="form-error session-payment-error">{studentError}</div>}
         <div className="payment-choice">
           <button type="button" className={payFull ? "active" : ""} onClick={() => { setPayFull(true); setPaidAmount(String(session.studentPrice)); }}><Check size={18} /><span><strong>دفع الحصة كاملة</strong><small>{money(session.studentPrice)} — الاختيار الافتراضي</small></span></button>
           <button type="button" className={!payFull ? "active partial" : ""} onClick={() => { setPayFull(false); setPaidAmount(""); }}><WalletCards size={18} /><span><strong>إدخال المبلغ المدفوع</strong><small>{pendingOldDebt > 0 ? "يمكن سداد الحصة والمديونية القديمة معاً" : "يتسجل الباقي على الطالب"}</small></span></button>

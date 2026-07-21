@@ -29,7 +29,7 @@ const testSnapshot = {
   teachers: [{ id: "99001", name: "أ/ مدرس اختبار الحفظ", phone: "01000099001", assignments: [{ stage: "المرحلة الإعدادية", grade: "الصف الأول", subject: "الرياضيات" }], active: true }],
   pricing: [{ id: "99001", stage: "المرحلة الإعدادية", grade: "الصف الأول", subject: "الرياضيات", studentPrice: 100, teacherFee: 70 }],
   sessions: [{ id: "99001", teacherId: "99001", stage: "المرحلة الإعدادية", grade: "الصف الأول", subject: "الرياضيات", room: "قاعة 1", date: "2026-07-19", scheduledTime: "17:00", status: "ended", startedAt: "17:00", endedAt: "18:00", studentIds: ["100"], studentPrice: 100, teacherFee: 70, studentPayments: { "100": 60 } }],
-  bookings: [],
+  bookings: [{ id: "99001", studentId: "100", teacherId: "99001", stage: "المرحلة الإعدادية", grade: "الصف الأول", subject: "الرياضيات", bookingFee: 175, createdAt: "2026-07-22", active: true }],
   expenses: [],
   debtPayments: [{ id: "99001", studentId: "100", sessionId: "99001", amount: 25, date: "2026-07-19", note: "اختبار سداد منفصل" }],
   audit: [],
@@ -48,6 +48,7 @@ try {
   const [lesson] = await request("lesson_sessions?id=eq.99001&select=id,student_price_snapshot,teacher_fee_snapshot,status");
   const [attendance] = await request("session_attendance?session_id=eq.99001&student_id=eq.100&select=paid_cash");
   const [settlement] = await request("student_debt_payments?id=eq.99001&select=student_id,session_id,amount,paid_at");
+  const [booking] = await request("advance_bookings?id=eq.99001&select=student_id,teacher_id,booking_fee,active");
   const [financial] = await request("session_financial_summary?id=eq.99001&select=gross_value,collected_cash,shortages,teacher_due,center_net_profit");
 
   assert.equal(Number(student.id), 100);
@@ -55,6 +56,8 @@ try {
   assert.equal(Number(lesson.teacher_fee_snapshot), 70);
   assert.equal(Number(attendance.paid_cash), 60);
   assert.equal(Number(settlement.amount), 25);
+  assert.equal(Number(booking.booking_fee), 175);
+  assert.equal(booking.active, true);
   assert.deepEqual({
     gross: Number(financial.gross_value),
     collected: Number(financial.collected_cash),
