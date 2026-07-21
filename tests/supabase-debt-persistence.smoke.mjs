@@ -10,7 +10,9 @@ const env = Object.fromEntries(envText.split(/\r?\n/).filter((line) => line && !
 const baseUrl = `${env.SUPABASE_URL}/rest/v1`;
 const headers = {
   apikey: env.SUPABASE_SERVICE_ROLE_KEY,
-  Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+  ...(!env.SUPABASE_SERVICE_ROLE_KEY.startsWith("sb_secret_")
+    ? { Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` }
+    : {}),
   "Content-Type": "application/json",
 };
 

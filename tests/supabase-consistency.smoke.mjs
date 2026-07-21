@@ -10,7 +10,9 @@ const env = Object.fromEntries(envText.split(/\r?\n/).filter((line) => line && !
 const secret = env.SUPABASE_SERVICE_ROLE_KEY;
 assert.ok(env.SUPABASE_URL && secret, "Supabase URL and service role key are required");
 const baseUrl = `${env.SUPABASE_URL}/rest/v1`;
-const headers = { apikey: secret, Authorization: `Bearer ${secret}` };
+const headers = secret.startsWith("sb_secret_")
+  ? { apikey: secret }
+  : { apikey: secret, Authorization: `Bearer ${secret}` };
 
 async function request(path) {
   const response = await fetch(`${baseUrl}/${path}`, { headers });
