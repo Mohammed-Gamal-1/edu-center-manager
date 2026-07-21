@@ -45,6 +45,7 @@ import {
   normalizeAttendancePaymentTotal,
   normalizePaidAmount,
   outstandingForAttendance,
+  outstandingForSession,
   outstandingForStudent,
   paidDuringSession,
   shortageForAttendance,
@@ -1060,7 +1061,9 @@ function AnalyticsPanel({ sessions, bookings, expenses, debtPayments, teachers }
   };
   const dimensionFiltered = ended.filter((lesson) => teacherFilter === "all" || lesson.teacherId === teacherFilter).filter((lesson) => subjectFilter === "all" || lesson.subject === subjectFilter).filter((lesson) => stageFilter === "all" || lesson.stage === stageFilter).filter((lesson) => gradeFilter === "all" || lesson.grade === gradeFilter);
   const dimensionFilteredBookings = bookings.filter((booking) => teacherFilter === "all" || booking.teacherId === teacherFilter).filter((booking) => subjectFilter === "all" || booking.subject === subjectFilter).filter((booking) => stageFilter === "all" || booking.stage === stageFilter).filter((booking) => gradeFilter === "all" || booking.grade === gradeFilter);
-  const filtered = dimensionFiltered.filter((lesson) => matchesPeriod(lesson.date));
+  const filtered = dimensionFiltered
+    .filter((lesson) => matchesPeriod(lesson.date))
+    .map((lesson) => ({ ...lesson, outstandingShortage: outstandingForSession(lesson, debtPayments) }));
   const filteredBookings = dimensionFilteredBookings.filter((booking) => matchesPeriod(booking.createdAt));
   const filteredExpenses = expenses.filter((expense) => matchesPeriod(expense.date));
   const dimensionSessionIds = new Set(dimensionFiltered.map((lesson) => lesson.id));

@@ -5,6 +5,7 @@ import {
   getSessionFinancials,
   normalizeAttendancePaymentTotal,
   outstandingForAttendance,
+  outstandingForSession,
   outstandingForStudent,
   paidDuringSession,
 } from "../lib/center-finance.ts";
@@ -43,6 +44,16 @@ test("later debt payments clear only the old attendance balance", () => {
   assert.equal(outstandingForAttendance(partialSession, "100", payments), 15);
   assert.equal(outstandingForStudent([partialSession], payments, "100"), 15);
   assert.equal(getSessionFinancials(partialSession).teacherDue, 140);
+});
+
+test("analytics shortage falls automatically when an old debt is paid", () => {
+  const partialPayment = [{ id: "1", sessionId: "11", studentId: "100", amount: 25, date: "2026-07-19" }];
+  const fullPayment = [{ id: "2", sessionId: "11", studentId: "100", amount: 40, date: "2026-07-20" }];
+
+  assert.equal(outstandingForSession(partialSession, []), 40);
+  assert.equal(outstandingForSession(partialSession, partialPayment), 15);
+  assert.equal(outstandingForSession(partialSession, fullPayment), 0);
+  assert.equal(getSessionFinancials({ ...partialSession, outstandingShortage: 0 }).shortages, 0);
 });
 
 test("active lesson shortages appear immediately in the student's debt", () => {

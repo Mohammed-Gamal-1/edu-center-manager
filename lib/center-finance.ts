@@ -6,6 +6,7 @@ export type FinancialSession = {
   studentPrice: number;
   teacherFee: number;
   studentPayments?: Record<string, number>;
+  outstandingShortage?: number;
 };
 
 export type DebtPaymentRecord = {
@@ -56,7 +57,10 @@ export function shortageForAttendance(session: FinancialSession, studentId: stri
 export function getSessionFinancials(session: FinancialSession): SessionFinancials {
   const fullTotal = session.studentIds.length * Math.max(0, session.studentPrice);
   const collected = session.studentIds.reduce((sum, studentId) => sum + paidDuringSession(session, studentId), 0);
-  const shortages = Math.max(0, fullTotal - collected);
+  const shortagesAtAttendance = Math.max(0, fullTotal - collected);
+  const shortages = session.outstandingShortage === undefined
+    ? shortagesAtAttendance
+    : Math.min(shortagesAtAttendance, Math.max(0, session.outstandingShortage));
   const teacherDue = session.studentIds.length * Math.max(0, session.teacherFee);
   return { fullTotal, shortages, collected, teacherDue, centerNet: collected - teacherDue };
 }
@@ -69,6 +73,10 @@ export function settledForAttendance(payments: DebtPaymentRecord[], sessionId: s
 
 export function outstandingForAttendance(session: FinancialSession, studentId: string, payments: DebtPaymentRecord[]) {
   return Math.max(0, shortageForAttendance(session, studentId) - settledForAttendance(payments, session.id, studentId));
+}
+
+export function outstandingForSession(session: FinancialSession, payments: DebtPaymentRecord[]) {
+  return session.studentIds.reduce((sum, studentId) => sum + outstandingForAttendance(session, studentId, payments), 0);
 }
 
 export function outstandingForStudent(sessions: FinancialSession[], payments: DebtPaymentRecord[], studentId: string) {
