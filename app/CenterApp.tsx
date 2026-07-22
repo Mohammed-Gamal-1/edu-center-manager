@@ -4129,7 +4129,7 @@ function AnalyticsPanel({ sessions, bookings, expenses, debtPayments, teachers }
   const debtRecoveryAlreadyReflected = filteredDebtPayments.filter((payment) => filteredSessionIds.has(payment.sessionId)).reduce((sum, payment) => sum + payment.amount, 0);
   const teacherDue = filtered.reduce((sum, lesson) => sum + lesson.studentIds.length * lesson.teacherFee, 0);
   const expenseTotal = filteredExpenses.reduce((sum, expense) => sum + expense.amount, 0);
-  const { sessionNet, net, averageRevenue } = calculateAnalyticsProfit({ fullSessionValue, teacherDue, sessionShortages, debtRecovery, debtRecoveryAlreadyReflected, bookingRevenue, expenseTotal, sessionCount: filtered.length });
+  const { sessionNet, net, averageRevenue, additiveDebtRecovery } = calculateAnalyticsProfit({ fullSessionValue, teacherDue, sessionShortages, debtRecovery, debtRecoveryAlreadyReflected, bookingRevenue, expenseTotal, sessionCount: filtered.length });
   const attendance = filtered.reduce((sum, lesson) => sum + lesson.studentIds.length, 0);
   const averageAttendance = filtered.length ? attendance / filtered.length : 0;
   const recoveredForSessions = (lessonIds: Set<string>) => filteredDebtPayments.filter((payment) => lessonIds.has(payment.sessionId)).reduce((sum, payment) => sum + payment.amount, 0);
@@ -4206,12 +4206,20 @@ function AnalyticsPanel({ sessions, bookings, expenses, debtPayments, teachers }
     const lessonFinancials = getSessionFinancials(lesson);
     const lessonGross = lessonFinancials.collected;
     const lessonTeacherDue = lessonFinancials.teacherDue;
+    const [lessonYear, lessonMonth] = key.split("-").map(Number);
+    const calendarMonthEnd = `${key}-${String(new Date(lessonYear, lessonMonth, 0).getDate()).padStart(2, "0")}`;
+    const monthEnd = key === todayIso().slice(0, 7) ? todayIso() : calendarMonthEnd;
+    const lessonOutstandingAtMonthEnd = outstandingForSession(
+      lesson,
+      debtPayments.filter((payment) => payment.date <= monthEnd),
+    );
+    const lessonNetAtMonthEnd = lessonFinancials.fullTotal - lessonTeacherDue - lessonOutstandingAtMonthEnd;
     current.sessions += 1;
     current.attendance += lesson.studentIds.length;
     current.gross += lessonGross;
     current.teacherDue += lessonTeacherDue;
-    current.sessionNet += lessonGross - lessonTeacherDue;
-    current.net += lessonGross - lessonTeacherDue;
+    current.sessionNet += lessonNetAtMonthEnd;
+    current.net += lessonNetAtMonthEnd;
     monthlyMap.set(key, current);
   });
   dimensionFilteredBookings.forEach((booking) => {
@@ -4259,7 +4267,8 @@ function AnalyticsPanel({ sessions, bookings, expenses, debtPayments, teachers }
         net: 0,
       };
       current.gross += payment.amount;
-      current.net += payment.amount;
+      const paymentSession = sessions.find((lesson) => lesson.id === payment.sessionId);
+      if (!paymentSession || paymentSession.date.slice(0, 7) !== key) current.net += payment.amount;
       monthlyMap.set(key, current);
     });
   expenses.forEach((expense) => {
@@ -4316,15 +4325,16 @@ function AnalyticsPanel({ sessions, bookings, expenses, debtPayments, teachers }
       ["الحصص المنتهية", filtered.length, "حصة"],
       ["إجمالي الحضور", attendance, "حضور"],
       ["متوسط حضور الطلاب", averageAttendance, "طالب / حصة"],
-      ["القيمة الكاملة للحصص", fullSessionValue, "ج.م"],
+      ["إجمالي قيمة الحصص", fullSessionValue, "ج.م"],
       ["مستحقات المدرسين", teacherDue, "ج.م"],
-      ["نواقص الحصص", sessionShortages, "ج.م"],
-      ["صافي ربح الحصص", sessionNet, "ج.م"],
+      ["المبالغ المتبقية على الطلاب", sessionShortages, "ج.م"],
+      ["صافي ربح الحصص بعد السداد", sessionNet, "ج.م"],
       ["إيراد الحجوزات المسبقة", bookingRevenue, "ج.م"],
       ["مصروفات السنتر", expenseTotal, "ج.م"],
-      ["تحصيل المديونيات السابقة", debtRecovery, "ج.م"],
+      ["تحصيل مديونيات خلال الفترة", debtRecovery, "ج.م"],
+      ["تحصيل مديونيات مضاف للصافي", additiveDebtRecovery, "ج.م"],
       ["صافي الربح", net, "ج.م"],
-      ["متوسط إيراد الحصة", averageRevenue, "ج.م"],
+      ["متوسط صافي ربح الحصة", averageRevenue, "ج.م"],
     ],
     sessions: filtered
       .slice()
@@ -4484,9 +4494,9 @@ function AnalyticsPanel({ sessions, bookings, expenses, debtPayments, teachers }
             <CircleDollarSign size={20} />
           </span>
           <div>
-            <small>دخل الحصص</small>
+            <small>إجمالي قيمة الحصص</small>
             <strong>{money(fullSessionValue)}</strong>
-            <em>القيمة الكاملة قبل مستحق المدرسين والنواقص</em>
+            <em>المبلغ المستحق قبل مستحق المدرسين والمديونيات</em>
           </div>
         </article>
         <article>
@@ -4504,9 +4514,9 @@ function AnalyticsPanel({ sessions, bookings, expenses, debtPayments, teachers }
             <WalletCards size={20} />
           </span>
           <div>
-            <small>نواقص الحصص</small>
+            <small>المبالغ المتبقية على الطلاب</small>
             <strong>{money(sessionShortages)}</strong>
-            <em>المبالغ غير المحصلة وتتحملها إدارة السنتر</em>
+            <em>الرصيد غير المدفوع حتى نهاية الفترة</em>
           </div>
         </article>
         <article className="net-card">
@@ -4514,9 +4524,9 @@ function AnalyticsPanel({ sessions, bookings, expenses, debtPayments, teachers }
             <TrendingUp size={20} />
           </span>
           <div>
-            <small>صافي ربح الحصص</small>
+            <small>صافي ربح الحصص بعد السداد</small>
             <strong>{money(sessionNet)}</strong>
-            <em>دخل الحصص − مستحق المدرسين − النواقص</em>
+            <em>قيمة الحصص − مستحق المدرسين − المتبقي</em>
           </div>
         </article>
         <article>
@@ -4544,9 +4554,9 @@ function AnalyticsPanel({ sessions, bookings, expenses, debtPayments, teachers }
             <CircleDollarSign size={20} />
           </span>
           <div>
-            <small>تحصيل مديونيات سابقة</small>
+            <small>تحصيل مديونيات خلال الفترة</small>
             <strong>{money(debtRecovery)}</strong>
-            <em>{filteredDebtPayments.length} عملية سداد ضمن الفترة</em>
+            <em>{money(debtRecoveryAlreadyReflected)} ضمن صافي الحصص · {money(additiveDebtRecovery)} مضافة للصافي</em>
           </div>
         </article>
         <article className="net-card">
@@ -4556,7 +4566,7 @@ function AnalyticsPanel({ sessions, bookings, expenses, debtPayments, teachers }
           <div>
             <small>صافي الربح</small>
             <strong>{money(net)}</strong>
-            <em>صافي الحصص + المديونيات + الحجوزات − المصروفات</em>
+            <em>صافي الحصص + {money(additiveDebtRecovery)} تحصيل غير محتسب + الحجوزات − المصروفات</em>
           </div>
         </article>
         <article className="net-card">
@@ -4564,9 +4574,9 @@ function AnalyticsPanel({ sessions, bookings, expenses, debtPayments, teachers }
             <BarChart3 size={20} />
           </span>
           <div>
-            <small>متوسط إيراد الحصة</small>
+            <small>متوسط صافي ربح الحصة</small>
             <strong>{money(averageRevenue)}</strong>
-            <em>صافي ربح الحصص ÷ عدد الحصص</em>
+            <em>صافي ربح الحصص بعد السداد ÷ عدد الحصص</em>
           </div>
         </article>
       </div>

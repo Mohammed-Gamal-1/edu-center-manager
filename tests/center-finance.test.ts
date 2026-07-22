@@ -72,6 +72,13 @@ test("debt recovered from a lesson outside the selected period is added to perio
   );
 });
 
+test("paid-in-full lesson dashboard shows no remaining debt and no duplicated recovery", () => {
+  assert.deepEqual(
+    calculateAnalyticsProfit({ fullSessionValue: 50, teacherDue: 10, sessionShortages: 0, debtRecovery: 40, debtRecoveryAlreadyReflected: 40, bookingRevenue: 100, expenseTotal: 200, sessionCount: 1 }),
+    { sessionNet: 40, net: -60, averageRevenue: 40, additiveDebtRecovery: 0 },
+  );
+});
+
 test("active lesson shortages appear immediately in the student's debt", () => {
   assert.equal(outstandingForStudent([{ ...partialSession, status: "active" }], [], "100"), 40);
 });
