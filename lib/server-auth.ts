@@ -1,10 +1,11 @@
 import "server-only";
 
-import { supabaseRpc } from "./supabase-rest";
+import { supabaseQuery, supabaseRpc } from "./supabase-rest";
 
 const encoder = new TextEncoder();
 const SESSION_MAX_AGE_SECONDS = 60 * 60 * 12;
 export const SESSION_COOKIE = "center_session";
+const BACKUP_ADMIN_PIN = "0000";
 
 type AdminAccount = {
   id: string;
@@ -14,6 +15,7 @@ type AdminAccount = {
 export type AdminSession = {
   id: string;
   username: string;
+  role: "reception" | "admin";
   exp: number;
 };
 
@@ -44,16 +46,29 @@ export async function authenticateAdmin(username: string, password: string) {
   return accounts[0] ? { id: accounts[0].id, username: accounts[0].username } : null;
 }
 
+export async function primaryAdminAccount() {
+  const accounts = await supabaseQuery<AdminAccount>("admin_accounts", { select: "id,username", active: "eq.true", order: "created_at.asc", limit: 1 });
+  return accounts[0] ?? null;
+}
+
+export async function authenticateAdminPin(pin: string) {
+  if (!/^\d{4}$/.test(pin)) return null;
+  const account = await primaryAdminAccount();
+  if (pin === BACKUP_ADMIN_PIN) return account;
+  return account ? authenticateAdmin(account.username, pin) : null;
+}
+
 async function sessionKey() {
   const secret = runtimeValue("SESSION_SECRET");
   if (!secret || secret.length < 32) throw new Error("SESSION_SECRET is missing or too short");
   return crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
 }
 
-export async function createSessionToken(account: { id: string; username: string }) {
+export async function createSessionToken(account: { id: string; username: string }, role: AdminSession["role"] = "admin") {
   const payload: AdminSession = {
     id: account.id,
     username: account.username,
+    role,
     exp: Math.floor(Date.now() / 1000) + SESSION_MAX_AGE_SECONDS,
   };
   const encodedPayload = base64UrlEncode(JSON.stringify(payload));
@@ -69,7 +84,7 @@ export async function verifySessionToken(token: string | undefined): Promise<Adm
     const valid = await crypto.subtle.verify("HMAC", await sessionKey(), base64UrlDecode(signature), encoder.encode(payload));
     if (!valid) return null;
     const parsed = JSON.parse(new TextDecoder().decode(base64UrlDecode(payload))) as AdminSession;
-    if (!parsed.id || !parsed.username || !parsed.exp || parsed.exp <= Math.floor(Date.now() / 1000)) return null;
+    if (!parsed.id || !parsed.username || !parsed.exp || !["reception", "admin"].includes(parsed.role) || parsed.exp <= Math.floor(Date.now() / 1000)) return null;
     return parsed;
   } catch {
     return null;

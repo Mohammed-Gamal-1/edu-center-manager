@@ -49,14 +49,14 @@ test("keeps cloud persistence, offline recovery, and admin auth protections in p
     readFile(new URL("../supabase/migrations/005_sync_snapshot_to_relational.sql", import.meta.url), "utf8"),
   ]);
 
-  assert.match(centerApp, /eltafawoq\.pending-state\.v1/);
-  assert.match(centerApp, /eltafawoq\.cloud-cache\.v1/);
+  assert.match(centerApp, /eltafawoq\.pending-state\.v3/);
+  assert.match(centerApp, /eltafawoq\.cloud-cache\.v3/);
   assert.match(centerApp, /addEventListener\("online"/);
   assert.match(centerApp, /saveInFlightRef/);
   assert.match(centerApp, /setCloudConflict/);
   assert.match(centerApp, /setStartTime\(new Date\(\)\.toTimeString\(\)\.slice\(0, 5\)\)/);
-  assert.match(centerApp, /type="time" value=\{startTime\} onInput=/);
-  assert.match(centerApp, /type="date" value=\{customDateFrom\} onInput=/);
+  assert.match(centerApp, /type="time"[\s\S]{0,160}value=\{startTime\}[\s\S]{0,160}onInput=/);
+  assert.match(centerApp, /type="date"[\s\S]{0,160}value=\{customDateFrom\}[\s\S]{0,160}onInput=/);
   assert.match(centerApp, /استخدام النسخة السحابية/);
   assert.match(centerApp, /حفظ نسخة هذا الجهاز/);
   assert.match(stateRoute, /baseVersion/);

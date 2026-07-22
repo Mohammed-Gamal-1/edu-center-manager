@@ -11,7 +11,7 @@ function createRecoveryCode() {
 
 export async function POST(request: Request) {
   const session = await sessionFromRequest(request);
-  if (!session) return Response.json({ ok: false, error: "الجلسة منتهية" }, { status: 401 });
+  if (!session || session.role !== "admin") return Response.json({ ok: false, error: "يجب فتح الإدارة أولاً" }, { status: 401 });
   try {
     const recoveryCode = createRecoveryCode();
     const updated = await supabaseRpc<{ id: string }>("set_admin_recovery_code", { p_admin_id: session.id, p_recovery_code: recoveryCode });
