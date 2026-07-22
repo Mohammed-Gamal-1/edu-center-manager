@@ -2,7 +2,7 @@
 
 import { Activity, Archive, BarChart3, Bell, BookOpen, CalendarDays, Check, ChevronLeft, CircleDollarSign, Cloud, CloudOff, Clock3, Edit3, FileClock, GraduationCap, History, LayoutDashboard, LockKeyhole, LoaderCircle, Menu, MoreHorizontal, PauseCircle, Plus, ReceiptText, Search, Settings, ShieldCheck, Sparkles, SquarePen, Trash2, TrendingUp, UserPlus, Users, WalletCards, X } from "lucide-react";
 import { FormEvent, ReactNode, useEffect, useRef, useState } from "react";
-import { allocateDebtPayment, DebtPaymentRecord, getSessionFinancials, normalizeAttendancePaymentTotal, normalizePaidAmount, outstandingForAttendance, outstandingForSession, outstandingForStudent, paidDuringSession, shortageForAttendance } from "../lib/center-finance";
+import { allocateDebtPayment, calculateAnalyticsProfit, DebtPaymentRecord, getSessionFinancials, normalizeAttendancePaymentTotal, normalizePaidAmount, outstandingForAttendance, outstandingForStudent, paidDuringSession, shortageForAttendance } from "../lib/center-finance";
 import { findActiveStudentConflict, hasMatchingBooking, isStudentInSessionGrade, nextStudentIdForStage } from "../lib/center-rules";
 import { downloadAnalyticsExcel, type AnalyticsExcelExport } from "../lib/analytics-excel";
 
@@ -4098,12 +4098,10 @@ function AnalyticsPanel({ sessions, bookings, expenses, debtPayments, teachers }
     .filter((booking) => subjectFilter === "all" || booking.subject === subjectFilter)
     .filter((booking) => stageFilter === "all" || booking.stage === stageFilter)
     .filter((booking) => gradeFilter === "all" || booking.grade === gradeFilter);
-  const filtered = dimensionFiltered
-    .filter((lesson) => matchesPeriod(lesson.date))
-    .map((lesson) => ({
-      ...lesson,
-      outstandingShortage: outstandingForSession(lesson, debtPayments),
-    }));
+  // Keep the shortage recorded at attendance immutable in analytics. Later debt
+  // payments are reported separately, otherwise the same payment increases net
+  // profit once by reducing shortages and again as recovered debt.
+  const filtered = dimensionFiltered.filter((lesson) => matchesPeriod(lesson.date));
   const filteredBookings = dimensionFilteredBookings.filter((booking) => matchesPeriod(booking.createdAt));
   const filteredExpenses = expenses.filter((expense) => matchesPeriod(expense.date));
   const dimensionSessionIds = new Set(dimensionFiltered.map((lesson) => lesson.id));
@@ -4117,11 +4115,9 @@ function AnalyticsPanel({ sessions, bookings, expenses, debtPayments, teachers }
   const debtRecovery = filteredDebtPayments.reduce((sum, payment) => sum + payment.amount, 0);
   const teacherDue = filtered.reduce((sum, lesson) => sum + lesson.studentIds.length * lesson.teacherFee, 0);
   const expenseTotal = filteredExpenses.reduce((sum, expense) => sum + expense.amount, 0);
-  const sessionNet = fullSessionValue - teacherDue - sessionShortages;
-  const net = sessionNet + debtRecovery + bookingRevenue - expenseTotal;
+  const { sessionNet, net, averageRevenue } = calculateAnalyticsProfit({ fullSessionValue, teacherDue, sessionShortages, debtRecovery, bookingRevenue, expenseTotal, sessionCount: filtered.length });
   const attendance = filtered.reduce((sum, lesson) => sum + lesson.studentIds.length, 0);
   const averageAttendance = filtered.length ? attendance / filtered.length : 0;
-  const averageRevenue = filtered.length ? sessionNet / filtered.length : 0;
   const recoveredForSessions = (lessonIds: Set<string>) => filteredDebtPayments.filter((payment) => lessonIds.has(payment.sessionId)).reduce((sum, payment) => sum + payment.amount, 0);
   const recoveredSubjects = filteredDebtPayments.map((payment) => sessions.find((lesson) => lesson.id === payment.sessionId)?.subject).filter((subject): subject is string => Boolean(subject));
   const bySubject = Array.from(new Set([...filtered.map((lesson) => lesson.subject), ...filteredBookings.map((booking) => booking.subject), ...recoveredSubjects]))
@@ -4549,7 +4545,7 @@ function AnalyticsPanel({ sessions, bookings, expenses, debtPayments, teachers }
             <em>صافي الحصص + المديونيات + الحجوزات − المصروفات</em>
           </div>
         </article>
-        <article>
+        <article className="net-card">
           <span>
             <BarChart3 size={20} />
           </span>

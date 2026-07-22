@@ -31,6 +31,23 @@ export type DebtPaymentAllocation = {
   amount: number;
 };
 
+export type AnalyticsProfitInput = {
+  fullSessionValue: number;
+  teacherDue: number;
+  sessionShortages: number;
+  debtRecovery: number;
+  bookingRevenue: number;
+  expenseTotal: number;
+  sessionCount: number;
+};
+
+export function calculateAnalyticsProfit(input: AnalyticsProfitInput) {
+  const sessionNet = input.fullSessionValue - input.teacherDue - input.sessionShortages;
+  const net = sessionNet + input.debtRecovery + input.bookingRevenue - input.expenseTotal;
+  const averageRevenue = input.sessionCount > 0 ? sessionNet / input.sessionCount : 0;
+  return { sessionNet, net, averageRevenue };
+}
+
 export function normalizePaidAmount(value: unknown, fullPrice: number) {
   const safeFullPrice = Math.max(0, Number.isFinite(fullPrice) ? fullPrice : 0);
   const numericValue = typeof value === "number" ? value : Number(value);

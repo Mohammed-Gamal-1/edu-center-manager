@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   allocateDebtPayment,
+  calculateAnalyticsProfit,
   getSessionFinancials,
   normalizeAttendancePaymentTotal,
   outstandingForAttendance,
@@ -46,14 +47,22 @@ test("later debt payments clear only the old attendance balance", () => {
   assert.equal(getSessionFinancials(partialSession).teacherDue, 140);
 });
 
-test("analytics shortage falls automatically when an old debt is paid", () => {
+test("debt settlement clears the current balance without rewriting the historical lesson shortage", () => {
   const partialPayment = [{ id: "1", sessionId: "11", studentId: "100", amount: 25, date: "2026-07-19" }];
   const fullPayment = [{ id: "2", sessionId: "11", studentId: "100", amount: 40, date: "2026-07-20" }];
 
   assert.equal(outstandingForSession(partialSession, []), 40);
   assert.equal(outstandingForSession(partialSession, partialPayment), 15);
   assert.equal(outstandingForSession(partialSession, fullPayment), 0);
-  assert.equal(getSessionFinancials({ ...partialSession, outstandingShortage: 0 }).shortages, 0);
+  assert.equal(getSessionFinancials(partialSession).shortages, 40);
+});
+
+test("analytics counts a recovered shortage exactly once", () => {
+  const beforePayment = calculateAnalyticsProfit({ fullSessionValue: 100, teacherDue: 70, sessionShortages: 40, debtRecovery: 0, bookingRevenue: 0, expenseTotal: 0, sessionCount: 1 });
+  const afterPayment = calculateAnalyticsProfit({ fullSessionValue: 100, teacherDue: 70, sessionShortages: 40, debtRecovery: 40, bookingRevenue: 0, expenseTotal: 0, sessionCount: 1 });
+
+  assert.deepEqual(beforePayment, { sessionNet: -10, net: -10, averageRevenue: -10 });
+  assert.deepEqual(afterPayment, { sessionNet: -10, net: 30, averageRevenue: -10 });
 });
 
 test("active lesson shortages appear immediately in the student's debt", () => {
