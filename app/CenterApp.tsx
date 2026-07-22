@@ -4115,17 +4115,13 @@ function AnalyticsPanel({ sessions, bookings, expenses, debtPayments, teachers }
   const sessionGross = filtered.reduce((sum, lesson) => sum + getSessionFinancials(lesson).collected, 0);
   const bookingRevenue = filteredBookings.reduce((sum, booking) => sum + booking.bookingFee, 0);
   const debtRecovery = filteredDebtPayments.reduce((sum, payment) => sum + payment.amount, 0);
-  const sessionIncome = sessionGross + debtRecovery;
-  const gross = sessionGross + bookingRevenue + debtRecovery;
   const teacherDue = filtered.reduce((sum, lesson) => sum + lesson.studentIds.length * lesson.teacherFee, 0);
   const expenseTotal = filteredExpenses.reduce((sum, expense) => sum + expense.amount, 0);
-  const sessionNet = sessionGross + debtRecovery - teacherDue - expenseTotal;
-  const bookingNet = bookingRevenue;
-  const net = sessionNet + bookingNet;
+  const sessionNet = fullSessionValue - teacherDue - sessionShortages;
+  const net = sessionNet + debtRecovery + bookingRevenue - expenseTotal;
   const attendance = filtered.reduce((sum, lesson) => sum + lesson.studentIds.length, 0);
   const averageAttendance = filtered.length ? attendance / filtered.length : 0;
-  const averageRevenue = filtered.length + filteredBookings.length ? gross / (filtered.length + filteredBookings.length) : 0;
-  const margin = gross ? (net / gross) * 100 : 0;
+  const averageRevenue = filtered.length ? sessionNet / filtered.length : 0;
   const recoveredForSessions = (lessonIds: Set<string>) => filteredDebtPayments.filter((payment) => lessonIds.has(payment.sessionId)).reduce((sum, payment) => sum + payment.amount, 0);
   const recoveredSubjects = filteredDebtPayments.map((payment) => sessions.find((lesson) => lesson.id === payment.sessionId)?.subject).filter((subject): subject is string => Boolean(subject));
   const bySubject = Array.from(new Set([...filtered.map((lesson) => lesson.subject), ...filteredBookings.map((booking) => booking.subject), ...recoveredSubjects]))
@@ -4253,7 +4249,6 @@ function AnalyticsPanel({ sessions, bookings, expenses, debtPayments, teachers }
         net: 0,
       };
       current.gross += payment.amount;
-      current.sessionNet += payment.amount;
       current.net += payment.amount;
       monthlyMap.set(key, current);
     });
@@ -4276,7 +4271,6 @@ function AnalyticsPanel({ sessions, bookings, expenses, debtPayments, teachers }
       net: 0,
     };
     current.expenses += expense.amount;
-    current.sessionNet -= expense.amount;
     current.net -= expense.amount;
     monthlyMap.set(key, current);
   });
@@ -4311,21 +4305,16 @@ function AnalyticsPanel({ sessions, bookings, expenses, debtPayments, teachers }
     summary: [
       ["الحصص المنتهية", filtered.length, "حصة"],
       ["إجمالي الحضور", attendance, "حضور"],
+      ["متوسط حضور الطلاب", averageAttendance, "طالب / حصة"],
       ["القيمة الكاملة للحصص", fullSessionValue, "ج.م"],
-      ["نواقص الحصص", sessionShortages, "ج.م"],
-      ["المحصل من الحصص", sessionGross, "ج.م"],
-      ["إيراد الحجوزات المسبقة", bookingRevenue, "ج.م"],
-      ["تحصيل المديونيات", debtRecovery, "ج.م"],
-      ["إجمالي دخل الحصص قبل مستحق المدرسين", sessionIncome, "ج.م"],
-      ["إجمالي الإيرادات", gross, "ج.م"],
       ["مستحقات المدرسين", teacherDue, "ج.م"],
-      ["مصروفات السنتر", expenseTotal, "ج.م"],
+      ["نواقص الحصص", sessionShortages, "ج.م"],
       ["صافي ربح الحصص", sessionNet, "ج.م"],
-      ["صافي ربح الحجوزات المسبقة", bookingNet, "ج.م"],
-      ["صافي ربح السنتر شامل الحجوزات", net, "ج.م"],
-      ["هامش السنتر", margin, "٪"],
-      ["متوسط الحضور للحصة", averageAttendance, "طالب"],
-      ["متوسط الإيراد", averageRevenue, "ج.م"],
+      ["إيراد الحجوزات المسبقة", bookingRevenue, "ج.م"],
+      ["مصروفات السنتر", expenseTotal, "ج.م"],
+      ["تحصيل المديونيات السابقة", debtRecovery, "ج.م"],
+      ["صافي الربح", net, "ج.م"],
+      ["متوسط إيراد الحصة", averageRevenue, "ج.م"],
     ],
     sessions: filtered
       .slice()
@@ -4455,7 +4444,7 @@ function AnalyticsPanel({ sessions, bookings, expenses, debtPayments, teachers }
             <CalendarDays size={20} />
           </span>
           <div>
-            <small>الحصص المنتهية</small>
+            <small>عدد الحصص</small>
             <strong>{filtered.length}</strong>
             <em>{periodLabel}</em>
           </div>
@@ -4465,9 +4454,19 @@ function AnalyticsPanel({ sessions, bookings, expenses, debtPayments, teachers }
             <Users size={20} />
           </span>
           <div>
-            <small>إجمالي الحضور</small>
+            <small>عدد الطلاب</small>
             <strong>{attendance}</strong>
-            <em>كل حضور محسوب</em>
+            <em>كل حضور للطالب محسوب</em>
+          </div>
+        </article>
+        <article>
+          <span>
+            <BarChart3 size={20} />
+          </span>
+          <div>
+            <small>متوسط حضور الطلاب</small>
+            <strong>{averageAttendance.toFixed(1)}</strong>
+            <em>عدد الطلاب ÷ عدد الحصص</em>
           </div>
         </article>
         <article>
@@ -4475,49 +4474,9 @@ function AnalyticsPanel({ sessions, bookings, expenses, debtPayments, teachers }
             <CircleDollarSign size={20} />
           </span>
           <div>
-            <small>إجمالي الإيرادات</small>
-            <strong>{money(gross)}</strong>
-            <em>المحصل من الحصص + الحجوزات + سداد المديونيات</em>
-          </div>
-        </article>
-        <article>
-          <span>
-            <CircleDollarSign size={20} />
-          </span>
-          <div>
-            <small>إجمالي دخل الحصص</small>
-            <strong>{money(sessionIncome)}</strong>
-            <em>دخل الحصص قبل خصم مستحق المدرسين</em>
-          </div>
-        </article>
-        <article>
-          <span>
-            <BookOpen size={20} />
-          </span>
-          <div>
-            <small>صافي ربح الحجوزات المسبقة</small>
-            <strong>{money(bookingNet)}</strong>
-            <em>{filteredBookings.length} حجز ضمن الفترة</em>
-          </div>
-        </article>
-        <article className="shortage-kpi">
-          <span>
-            <WalletCards size={20} />
-          </span>
-          <div>
-            <small>نواقص الحصص</small>
-            <strong>{money(sessionShortages)}</strong>
-            <em>من قيمة كاملة {money(fullSessionValue)}</em>
-          </div>
-        </article>
-        <article>
-          <span>
-            <CircleDollarSign size={20} />
-          </span>
-          <div>
-            <small>تحصيل مديونيات سابقة</small>
-            <strong>{money(debtRecovery)}</strong>
-            <em>{filteredDebtPayments.length} عملية سداد ضمن الفترة</em>
+            <small>دخل الحصص</small>
+            <strong>{money(fullSessionValue)}</strong>
+            <em>القيمة الكاملة قبل مستحق المدرسين والنواقص</em>
           </div>
         </article>
         <article>
@@ -4527,7 +4486,37 @@ function AnalyticsPanel({ sessions, bookings, expenses, debtPayments, teachers }
           <div>
             <small>مستحقات المدرسين</small>
             <strong>{money(teacherDue)}</strong>
-            <em>عن الطلاب الحاضرين</em>
+            <em>عن جميع الطلاب الحاضرين</em>
+          </div>
+        </article>
+        <article className="shortage-kpi">
+          <span>
+            <WalletCards size={20} />
+          </span>
+          <div>
+            <small>نواقص الحصص</small>
+            <strong>{money(sessionShortages)}</strong>
+            <em>المبالغ غير المحصلة وتتحملها إدارة السنتر</em>
+          </div>
+        </article>
+        <article className="net-card">
+          <span>
+            <TrendingUp size={20} />
+          </span>
+          <div>
+            <small>صافي ربح الحصص</small>
+            <strong>{money(sessionNet)}</strong>
+            <em>دخل الحصص − مستحق المدرسين − النواقص</em>
+          </div>
+        </article>
+        <article>
+          <span>
+            <BookOpen size={20} />
+          </span>
+          <div>
+            <small>الحجوزات المسبقة</small>
+            <strong>{money(bookingRevenue)}</strong>
+            <em>{filteredBookings.length} حجز ضمن الفترة</em>
           </div>
         </article>
         <article className="expense-kpi">
@@ -4540,14 +4529,14 @@ function AnalyticsPanel({ sessions, bookings, expenses, debtPayments, teachers }
             <em>{filteredExpenses.length} مصروف ضمن الفترة</em>
           </div>
         </article>
-        <article className="net-card">
+        <article>
           <span>
-            <TrendingUp size={20} />
+            <CircleDollarSign size={20} />
           </span>
           <div>
-            <small>صافي ربح الحصص</small>
-            <strong>{money(sessionNet)}</strong>
-            <em>بعد مستحق المدرسين والمصروفات</em>
+            <small>تحصيل مديونيات سابقة</small>
+            <strong>{money(debtRecovery)}</strong>
+            <em>{filteredDebtPayments.length} عملية سداد ضمن الفترة</em>
           </div>
         </article>
         <article className="net-card">
@@ -4555,9 +4544,9 @@ function AnalyticsPanel({ sessions, bookings, expenses, debtPayments, teachers }
             <TrendingUp size={20} />
           </span>
           <div>
-            <small>صافي الربح شامل الحجوزات</small>
+            <small>صافي الربح</small>
             <strong>{money(net)}</strong>
-            <em>هامش {margin.toFixed(1)}٪</em>
+            <em>صافي الحصص + المديونيات + الحجوزات − المصروفات</em>
           </div>
         </article>
         <article>
@@ -4565,9 +4554,9 @@ function AnalyticsPanel({ sessions, bookings, expenses, debtPayments, teachers }
             <BarChart3 size={20} />
           </span>
           <div>
-            <small>متوسط الحضور / حصة</small>
-            <strong>{averageAttendance.toFixed(1)}</strong>
-            <em>متوسط الإيراد {money(averageRevenue)}</em>
+            <small>متوسط إيراد الحصة</small>
+            <strong>{money(averageRevenue)}</strong>
+            <em>صافي ربح الحصص ÷ عدد الحصص</em>
           </div>
         </article>
       </div>
