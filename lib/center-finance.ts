@@ -36,6 +36,7 @@ export type AnalyticsProfitInput = {
   teacherDue: number;
   sessionShortages: number;
   debtRecovery: number;
+  debtRecoveryAlreadyReflected?: number;
   bookingRevenue: number;
   expenseTotal: number;
   sessionCount: number;
@@ -43,9 +44,10 @@ export type AnalyticsProfitInput = {
 
 export function calculateAnalyticsProfit(input: AnalyticsProfitInput) {
   const sessionNet = input.fullSessionValue - input.teacherDue - input.sessionShortages;
-  const net = sessionNet + input.debtRecovery + input.bookingRevenue - input.expenseTotal;
+  const additiveDebtRecovery = Math.max(0, input.debtRecovery - (input.debtRecoveryAlreadyReflected ?? 0));
+  const net = sessionNet + additiveDebtRecovery + input.bookingRevenue - input.expenseTotal;
   const averageRevenue = input.sessionCount > 0 ? sessionNet / input.sessionCount : 0;
-  return { sessionNet, net, averageRevenue };
+  return { sessionNet, net, averageRevenue, additiveDebtRecovery };
 }
 
 export function normalizePaidAmount(value: unknown, fullPrice: number) {

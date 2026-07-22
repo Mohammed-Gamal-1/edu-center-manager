@@ -2,7 +2,7 @@
 
 import { Activity, Archive, BarChart3, Bell, BookOpen, CalendarDays, Check, ChevronLeft, CircleDollarSign, Cloud, CloudOff, Clock3, Edit3, FileClock, GraduationCap, History, LayoutDashboard, LockKeyhole, LoaderCircle, Menu, MoreHorizontal, PauseCircle, Plus, ReceiptText, Search, Settings, ShieldCheck, Sparkles, SquarePen, Trash2, TrendingUp, UserPlus, Users, WalletCards, X } from "lucide-react";
 import { FormEvent, ReactNode, useEffect, useRef, useState } from "react";
-import { allocateDebtPayment, calculateAnalyticsProfit, DebtPaymentRecord, getSessionFinancials, normalizeAttendancePaymentTotal, normalizePaidAmount, outstandingForAttendance, outstandingForStudent, paidDuringSession, shortageForAttendance } from "../lib/center-finance";
+import { allocateDebtPayment, calculateAnalyticsProfit, DebtPaymentRecord, getSessionFinancials, normalizeAttendancePaymentTotal, normalizePaidAmount, outstandingForAttendance, outstandingForSession, outstandingForStudent, paidDuringSession, shortageForAttendance } from "../lib/center-finance";
 import { findActiveStudentConflict, hasMatchingBooking, isStudentInSessionGrade, nextStudentIdForStage } from "../lib/center-rules";
 import { downloadAnalyticsExcel, type AnalyticsExcelExport } from "../lib/analytics-excel";
 
@@ -106,8 +106,12 @@ type CenterSnapshot = {
 
 type LocalSnapshot = { state: CenterSnapshot; baseVersion: number };
 
-const LOCAL_PENDING_KEY = "eltafawoq.pending-state.v1";
-const LOCAL_CACHE_KEY = "eltafawoq.cloud-cache.v1";
+const LOCAL_PENDING_KEY = "eltafawoq.pending-state.v2";
+const LOCAL_CACHE_KEY = "eltafawoq.cloud-cache.v2";
+
+const sameSnapshotContent = (left: CenterSnapshot, right: CenterSnapshot) => {
+  return JSON.stringify({ ...left, savedAt: "" }) === JSON.stringify({ ...right, savedAt: "" });
+};
 
 const stages: Stage[] = ["المرحلة الابتدائية", "المرحلة الإعدادية", "المرحلة الثانوية"];
 const gradesByStage: Record<Stage, string[]> = {
@@ -410,6 +414,13 @@ export default function CenterApp() {
           };
           if (response.status === 409 || result.conflict) {
             if (result.state && typeof result.version === "number") {
+              if (sameSnapshotContent(snapshot, result.state)) {
+                versionRef.current = result.version;
+                localStorage.setItem(LOCAL_CACHE_KEY, JSON.stringify({ state: result.state, baseVersion: result.version } satisfies LocalSnapshot));
+                localStorage.removeItem(LOCAL_PENDING_KEY);
+                setSyncStatus("saved");
+                return;
+              }
               setCloudConflict({
                 state: result.state,
                 baseVersion: result.version,
@@ -4098,14 +4109,16 @@ function AnalyticsPanel({ sessions, bookings, expenses, debtPayments, teachers }
     .filter((booking) => subjectFilter === "all" || booking.subject === subjectFilter)
     .filter((booking) => stageFilter === "all" || booking.stage === stageFilter)
     .filter((booking) => gradeFilter === "all" || booking.grade === gradeFilter);
-  // Keep the shortage recorded at attendance immutable in analytics. Later debt
-  // payments are reported separately, otherwise the same payment increases net
-  // profit once by reducing shortages and again as recovered debt.
-  const filtered = dimensionFiltered.filter((lesson) => matchesPeriod(lesson.date));
+  const reportEndDate = period === "custom" ? customDateTo || customDateFrom : todayIso();
+  const debtPaymentsThroughReportEnd = debtPayments.filter((payment) => payment.date <= reportEndDate);
+  const filtered = dimensionFiltered
+    .filter((lesson) => matchesPeriod(lesson.date))
+    .map((lesson) => ({ ...lesson, outstandingShortage: outstandingForSession(lesson, debtPaymentsThroughReportEnd) }));
   const filteredBookings = dimensionFilteredBookings.filter((booking) => matchesPeriod(booking.createdAt));
   const filteredExpenses = expenses.filter((expense) => matchesPeriod(expense.date));
   const dimensionSessionIds = new Set(dimensionFiltered.map((lesson) => lesson.id));
   const filteredDebtPayments = debtPayments.filter((payment) => dimensionSessionIds.has(payment.sessionId) && matchesPeriod(payment.date));
+  const filteredSessionIds = new Set(filtered.map((lesson) => lesson.id));
   const subjectOptions = Array.from(new Set([...ended.map((lesson) => lesson.subject), ...bookings.map((booking) => booking.subject)]));
   const gradeOptions = Array.from(new Set([...ended.filter((lesson) => stageFilter === "all" || lesson.stage === stageFilter).map((lesson) => lesson.grade), ...bookings.filter((booking) => stageFilter === "all" || booking.stage === stageFilter).map((booking) => booking.grade)]));
   const fullSessionValue = filtered.reduce((sum, lesson) => sum + getSessionFinancials(lesson).fullTotal, 0);
@@ -4113,9 +4126,10 @@ function AnalyticsPanel({ sessions, bookings, expenses, debtPayments, teachers }
   const sessionGross = filtered.reduce((sum, lesson) => sum + getSessionFinancials(lesson).collected, 0);
   const bookingRevenue = filteredBookings.reduce((sum, booking) => sum + booking.bookingFee, 0);
   const debtRecovery = filteredDebtPayments.reduce((sum, payment) => sum + payment.amount, 0);
+  const debtRecoveryAlreadyReflected = filteredDebtPayments.filter((payment) => filteredSessionIds.has(payment.sessionId)).reduce((sum, payment) => sum + payment.amount, 0);
   const teacherDue = filtered.reduce((sum, lesson) => sum + lesson.studentIds.length * lesson.teacherFee, 0);
   const expenseTotal = filteredExpenses.reduce((sum, expense) => sum + expense.amount, 0);
-  const { sessionNet, net, averageRevenue } = calculateAnalyticsProfit({ fullSessionValue, teacherDue, sessionShortages, debtRecovery, bookingRevenue, expenseTotal, sessionCount: filtered.length });
+  const { sessionNet, net, averageRevenue } = calculateAnalyticsProfit({ fullSessionValue, teacherDue, sessionShortages, debtRecovery, debtRecoveryAlreadyReflected, bookingRevenue, expenseTotal, sessionCount: filtered.length });
   const attendance = filtered.reduce((sum, lesson) => sum + lesson.studentIds.length, 0);
   const averageAttendance = filtered.length ? attendance / filtered.length : 0;
   const recoveredForSessions = (lessonIds: Set<string>) => filteredDebtPayments.filter((payment) => lessonIds.has(payment.sessionId)).reduce((sum, payment) => sum + payment.amount, 0);

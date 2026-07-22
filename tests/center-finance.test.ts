@@ -57,12 +57,19 @@ test("debt settlement clears the current balance without rewriting the historica
   assert.equal(getSessionFinancials(partialSession).shortages, 40);
 });
 
-test("analytics counts a recovered shortage exactly once", () => {
+test("analytics counts a recovered shortage exactly once after it leaves the current shortage balance", () => {
   const beforePayment = calculateAnalyticsProfit({ fullSessionValue: 100, teacherDue: 70, sessionShortages: 40, debtRecovery: 0, bookingRevenue: 0, expenseTotal: 0, sessionCount: 1 });
-  const afterPayment = calculateAnalyticsProfit({ fullSessionValue: 100, teacherDue: 70, sessionShortages: 40, debtRecovery: 40, bookingRevenue: 0, expenseTotal: 0, sessionCount: 1 });
+  const afterPayment = calculateAnalyticsProfit({ fullSessionValue: 100, teacherDue: 70, sessionShortages: 0, debtRecovery: 40, debtRecoveryAlreadyReflected: 40, bookingRevenue: 0, expenseTotal: 0, sessionCount: 1 });
 
-  assert.deepEqual(beforePayment, { sessionNet: -10, net: -10, averageRevenue: -10 });
-  assert.deepEqual(afterPayment, { sessionNet: -10, net: 30, averageRevenue: -10 });
+  assert.deepEqual(beforePayment, { sessionNet: -10, net: -10, averageRevenue: -10, additiveDebtRecovery: 0 });
+  assert.deepEqual(afterPayment, { sessionNet: 30, net: 30, averageRevenue: 30, additiveDebtRecovery: 0 });
+});
+
+test("debt recovered from a lesson outside the selected period is added to period profit", () => {
+  assert.deepEqual(
+    calculateAnalyticsProfit({ fullSessionValue: 25, teacherDue: 20, sessionShortages: 0, debtRecovery: 40, debtRecoveryAlreadyReflected: 0, bookingRevenue: 0, expenseTotal: 0, sessionCount: 1 }),
+    { sessionNet: 5, net: 45, averageRevenue: 5, additiveDebtRecovery: 40 },
+  );
 });
 
 test("active lesson shortages appear immediately in the student's debt", () => {
