@@ -106,8 +106,8 @@ type CenterSnapshot = {
 
 type LocalSnapshot = { state: CenterSnapshot; baseVersion: number };
 
-const LOCAL_PENDING_KEY = "eltafawoq.pending-state.v2";
-const LOCAL_CACHE_KEY = "eltafawoq.cloud-cache.v2";
+const LOCAL_PENDING_KEY = "eltafawoq.pending-state.v3";
+const LOCAL_CACHE_KEY = "eltafawoq.cloud-cache.v3";
 
 const sameSnapshotContent = (left: CenterSnapshot, right: CenterSnapshot) => {
   return JSON.stringify({ ...left, savedAt: "" }) === JSON.stringify({ ...right, savedAt: "" });

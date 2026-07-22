@@ -49,8 +49,8 @@ test("keeps cloud persistence, offline recovery, and admin auth protections in p
     readFile(new URL("../supabase/migrations/005_sync_snapshot_to_relational.sql", import.meta.url), "utf8"),
   ]);
 
-  assert.match(centerApp, /eltafawoq\.pending-state\.v2/);
-  assert.match(centerApp, /eltafawoq\.cloud-cache\.v2/);
+  assert.match(centerApp, /eltafawoq\.pending-state\.v3/);
+  assert.match(centerApp, /eltafawoq\.cloud-cache\.v3/);
   assert.match(centerApp, /addEventListener\("online"/);
   assert.match(centerApp, /saveInFlightRef/);
   assert.match(centerApp, /setCloudConflict/);
