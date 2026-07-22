@@ -4115,6 +4115,7 @@ function AnalyticsPanel({ sessions, bookings, expenses, debtPayments, teachers }
   const sessionGross = filtered.reduce((sum, lesson) => sum + getSessionFinancials(lesson).collected, 0);
   const bookingRevenue = filteredBookings.reduce((sum, booking) => sum + booking.bookingFee, 0);
   const debtRecovery = filteredDebtPayments.reduce((sum, payment) => sum + payment.amount, 0);
+  const sessionIncome = sessionGross + debtRecovery;
   const gross = sessionGross + bookingRevenue + debtRecovery;
   const teacherDue = filtered.reduce((sum, lesson) => sum + lesson.studentIds.length * lesson.teacherFee, 0);
   const expenseTotal = filteredExpenses.reduce((sum, expense) => sum + expense.amount, 0);
@@ -4315,6 +4316,7 @@ function AnalyticsPanel({ sessions, bookings, expenses, debtPayments, teachers }
       ["المحصل من الحصص", sessionGross, "ج.م"],
       ["إيراد الحجوزات المسبقة", bookingRevenue, "ج.م"],
       ["تحصيل المديونيات", debtRecovery, "ج.م"],
+      ["إجمالي دخل الحصص قبل مستحق المدرسين", sessionIncome, "ج.م"],
       ["إجمالي الإيرادات", gross, "ج.م"],
       ["مستحقات المدرسين", teacherDue, "ج.م"],
       ["مصروفات السنتر", expenseTotal, "ج.م"],
@@ -4476,6 +4478,16 @@ function AnalyticsPanel({ sessions, bookings, expenses, debtPayments, teachers }
             <small>إجمالي الإيرادات</small>
             <strong>{money(gross)}</strong>
             <em>المحصل من الحصص + الحجوزات + سداد المديونيات</em>
+          </div>
+        </article>
+        <article>
+          <span>
+            <CircleDollarSign size={20} />
+          </span>
+          <div>
+            <small>إجمالي دخل الحصص</small>
+            <strong>{money(sessionIncome)}</strong>
+            <em>دخل الحصص قبل خصم مستحق المدرسين</em>
           </div>
         </article>
         <article>
