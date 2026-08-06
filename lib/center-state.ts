@@ -1,3 +1,5 @@
+import { linkLegacyPriceRulesToTeachers, type PriceRuleIdentity, type TeacherIdentity } from "./center-pricing.ts";
+
 export type CenterStatePayload = {
   students: unknown[];
   teachers: unknown[];
@@ -42,6 +44,37 @@ export function isCenterStatePayload(value: unknown): value is CenterStatePayloa
   return true;
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+
+export function normalizeCenterStatePricing(state: CenterStatePayload): CenterStatePayload {
+  const teachers: TeacherIdentity[] = [];
+  for (const rawTeacher of state.teachers) {
+    if (!isRecord(rawTeacher) || !Array.isArray(rawTeacher.assignments)) return state;
+    const assignments = rawTeacher.assignments.filter(isRecord).map((assignment) => ({
+      stage: String(assignment.stage ?? ""),
+      grade: String(assignment.grade ?? ""),
+      subject: String(assignment.subject ?? ""),
+    }));
+    teachers.push({ id: String(rawTeacher.id ?? ""), active: rawTeacher.active === undefined ? true : rawTeacher.active === true, assignments });
+  }
+
+  const pricing: PriceRuleIdentity[] = [];
+  for (const rawRule of state.pricing) {
+    if (!isRecord(rawRule)) return state;
+    pricing.push({
+      id: String(rawRule.id ?? ""),
+      teacherId: rawRule.teacherId === undefined ? undefined : String(rawRule.teacherId ?? ""),
+      stage: String(rawRule.stage ?? ""),
+      grade: String(rawRule.grade ?? ""),
+      subject: String(rawRule.subject ?? ""),
+      studentPrice: Number(rawRule.studentPrice),
+      teacherFee: Number(rawRule.teacherFee),
+    });
+  }
+
+  return { ...state, pricing: linkLegacyPriceRulesToTeachers(pricing, teachers) };
+}
+
 export function findActiveStudentStateConflict(state: CenterStatePayload) {
   const activeByStudent = new Map<string, { sessionId: string; subject: string }>();
   for (const rawSession of state.sessions) {
@@ -66,7 +99,7 @@ export function findActiveStudentStateConflict(state: CenterStatePayload) {
 }
 
 export type CenterStateBusinessConflict = {
-  kind: "duplicate-id" | "duplicate-price" | "duplicate-room" | "room-schedule" | "room-active";
+  kind: "duplicate-id" | "duplicate-price" | "invalid-price" | "duplicate-booking" | "invalid-booking" | "duplicate-room" | "room-schedule" | "room-active";
   message: string;
 };
 
@@ -96,9 +129,20 @@ export function findCenterStateBusinessConflict(state: CenterStatePayload): Cent
 
   const priceKeys = new Set<string>();
   for (const rawRule of state.pricing) {
-    if (!rawRule || typeof rawRule !== "object" || Array.isArray(rawRule)) continue;
+    if (!rawRule || typeof rawRule !== "object" || Array.isArray(rawRule)) return { kind: "invalid-price", message: "بيانات سعر الحصة غير صحيحة" };
     const rule = rawRule as Record<string, unknown>;
-    const key = [rule.stage, rule.grade, rule.subject]
+    const studentPrice = Number(rule.studentPrice);
+    const teacherFee = Number(rule.teacherFee);
+    if (!Number.isFinite(studentPrice) || !Number.isFinite(teacherFee) || studentPrice < 0 || teacherFee < 0 || teacherFee > studentPrice) {
+      return { kind: "invalid-price", message: "سعر الطالب وأجر المدرس يجب أن يكونا أرقاماً صحيحة، وأجر المدرس لا يتجاوز سعر الطالب" };
+    }
+    const teacherId = String(rule.teacherId ?? "");
+    if (teacherId) {
+      const teacher = state.teachers.find((rawTeacher) => isRecord(rawTeacher) && String(rawTeacher.id ?? "") === teacherId) as Record<string, unknown> | undefined;
+      const ownsAssignment = teacher && Array.isArray(teacher.assignments) && teacher.assignments.some((assignment) => isRecord(assignment) && assignment.stage === rule.stage && assignment.grade === rule.grade && assignment.subject === rule.subject);
+      if (!ownsAssignment) return { kind: "invalid-price", message: "قاعدة السعر يجب أن ترتبط بمادة وصف مسجلين للمدرس نفسه" };
+    }
+    const key = [teacherId, rule.stage, rule.grade, rule.subject]
       .map((value) =>
         String(value ?? "")
           .trim()
@@ -108,9 +152,19 @@ export function findCenterStateBusinessConflict(state: CenterStatePayload): Cent
     if (priceKeys.has(key))
       return {
         kind: "duplicate-price",
-        message: "يوجد أكثر من سعر لنفس المرحلة والصف والمادة",
+        message: "يوجد أكثر من سعر لنفس المدرس والمرحلة والصف والمادة",
       };
     priceKeys.add(key);
+  }
+
+  const bookingKeys = new Set<string>();
+  for (const rawBooking of state.bookings) {
+    if (!isRecord(rawBooking)) return { kind: "invalid-booking", message: "بيانات الحجز المسبق غير صحيحة" };
+    const bookingFee = Number(rawBooking.bookingFee);
+    if (!Number.isFinite(bookingFee) || bookingFee < 0) return { kind: "invalid-booking", message: "قيمة الحجز المسبق يجب أن تكون رقماً لا يقل عن صفر" };
+    const key = [rawBooking.studentId, rawBooking.teacherId, rawBooking.stage, rawBooking.grade, rawBooking.subject].map((value) => String(value ?? "").trim().toLocaleLowerCase("ar")).join("\u0000");
+    if (bookingKeys.has(key)) return { kind: "duplicate-booking", message: "يوجد حجز مكرر لنفس الطالب والمدرس والمادة" };
+    bookingKeys.add(key);
   }
 
   const activeRooms = new Map<string, string>();

@@ -41,7 +41,7 @@ const [stateRows, students, teachers, sessions, bookings, expenses, debtPayments
   request("student_debt_payments?select=id"),
   request("session_attendance?select=session_id,student_id"),
   request("rooms?active=eq.true&select=name"),
-  request("price_rules?active=eq.true&select=id"),
+  request("price_rules?active=eq.true&select=id,teacher_id"),
 ]);
 
 assert.equal(stateRows.length, 1, "one authoritative center_state row must exist");
@@ -61,6 +61,11 @@ const actualAttendance = attendance.map((row) => `${row.session_id}:${row.studen
 assert.deepEqual(actualAttendance, expectedAttendance, "attendance rows must match every saved session attendee");
 assert.deepEqual(rooms.map((room) => room.name).sort(), [...state.rooms].sort(), "active rooms must match the snapshot");
 assert.equal(prices.length, state.pricing.length, "active price rule count must match the snapshot");
+assert.deepEqual(
+  prices.map((rule) => String(rule.teacher_id ?? "")).sort(),
+  state.pricing.map((rule) => String(rule.teacherId ?? "")).sort(),
+  "teacher-linked price rows must match the authoritative snapshot",
+);
 
 const activeStudentSessions = new Map();
 for (const session of state.sessions.filter((item) => item.status === "active")) {

@@ -3,6 +3,7 @@
 import { Activity, Archive, BarChart3, Bell, BookOpen, CalendarDays, Check, ChevronLeft, CircleDollarSign, Cloud, CloudOff, Clock3, Edit3, FileClock, GraduationCap, History, LayoutDashboard, LockKeyhole, LoaderCircle, Menu, MoreHorizontal, PauseCircle, Plus, ReceiptText, Search, Settings, ShieldCheck, Sparkles, SquarePen, Trash2, TrendingUp, UserPlus, Users, WalletCards, X } from "lucide-react";
 import { FormEvent, ReactNode, useEffect, useRef, useState } from "react";
 import { allocateDebtPayment, calculateAnalyticsProfit, DebtPaymentRecord, getSessionFinancials, normalizeAttendancePaymentTotal, normalizePaidAmount, outstandingForAttendance, outstandingForSession, outstandingForStudent, paidDuringSession, shortageForAttendance } from "../lib/center-finance";
+import { bookingFeeForSelection, findTeacherPriceRule, linkLegacyPriceRulesToTeachers } from "../lib/center-pricing";
 import { findActiveStudentConflict, hasMatchingBooking, isStudentInSessionGrade, nextStudentIdForStage } from "../lib/center-rules";
 import { downloadAnalyticsExcel, type AnalyticsExcelExport } from "../lib/analytics-excel";
 
@@ -45,6 +46,7 @@ type Booking = {
 
 type PriceRule = {
   id: string;
+  teacherId: string;
   stage: Stage;
   grade: string;
   subject: string;
@@ -278,7 +280,7 @@ export default function CenterApp() {
     const applySnapshot = (state: CenterSnapshot) => {
       setStudents(state.students);
       setTeachers(state.teachers);
-      setPricing(state.pricing);
+      setPricing(linkLegacyPriceRulesToTeachers(state.pricing, state.teachers));
       setSessions(state.sessions);
       setBookings(state.bookings);
       setExpenses(state.expenses);
@@ -499,20 +501,24 @@ export default function CenterApp() {
 
   const useCloudConflictCopy = () => {
     if (!cloudConflict) return;
+    const normalizedCloudState = {
+      ...cloudConflict.state,
+      pricing: linkLegacyPriceRulesToTeachers(cloudConflict.state.pricing, cloudConflict.state.teachers),
+    };
     skipNextPersistRef.current = true;
-    setStudents(cloudConflict.state.students);
-    setTeachers(cloudConflict.state.teachers);
-    setPricing(cloudConflict.state.pricing);
-    setSessions(cloudConflict.state.sessions);
-    setBookings(cloudConflict.state.bookings);
-    setExpenses(cloudConflict.state.expenses);
-    setDebtPayments(cloudConflict.state.debtPayments ?? []);
-    setAudit(cloudConflict.state.audit);
-    setSubjectCatalog(cloudConflict.state.subjectCatalog);
-    setRooms(cloudConflict.state.rooms);
+    setStudents(normalizedCloudState.students);
+    setTeachers(normalizedCloudState.teachers);
+    setPricing(normalizedCloudState.pricing);
+    setSessions(normalizedCloudState.sessions);
+    setBookings(normalizedCloudState.bookings);
+    setExpenses(normalizedCloudState.expenses);
+    setDebtPayments(normalizedCloudState.debtPayments ?? []);
+    setAudit(normalizedCloudState.audit);
+    setSubjectCatalog(normalizedCloudState.subjectCatalog);
+    setRooms(normalizedCloudState.rooms);
     versionRef.current = cloudConflict.baseVersion;
-    latestSnapshotRef.current = cloudConflict.state;
-    localStorage.setItem(LOCAL_CACHE_KEY, JSON.stringify(cloudConflict));
+    latestSnapshotRef.current = normalizedCloudState;
+    localStorage.setItem(LOCAL_CACHE_KEY, JSON.stringify({ state: normalizedCloudState, baseVersion: cloudConflict.baseVersion } satisfies LocalSnapshot));
     localStorage.removeItem(LOCAL_PENDING_KEY);
     setCloudConflict(null);
     setSyncStatus("saved");
@@ -1033,9 +1039,12 @@ export default function CenterApp() {
               ]);
             }
             if (advanceBookingFee !== null && !hasMatchingBooking(bookings, currentLesson, studentId)) {
-              setBookings((current) => [
-                {
-                  id: String(Math.max(0, ...current.map((booking) => Number(booking.id)).filter(Number.isFinite)) + 1),
+              setBookings((current) => {
+                const existingIndex = current.findIndex(
+                  (booking) => booking.studentId === studentId && booking.teacherId === currentLesson.teacherId && booking.stage === currentLesson.stage && booking.grade === currentLesson.grade && booking.subject === currentLesson.subject,
+                );
+                const booking: Booking = {
+                  id: existingIndex >= 0 ? current[existingIndex].id : String(Math.max(0, ...current.map((item) => Number(item.id)).filter(Number.isFinite)) + 1),
                   studentId,
                   teacherId: currentLesson.teacherId,
                   stage: currentLesson.stage,
@@ -1044,9 +1053,9 @@ export default function CenterApp() {
                   bookingFee: advanceBookingFee,
                   createdAt: todayIso(),
                   active: true,
-                },
-                ...current,
-              ]);
+                };
+                return existingIndex >= 0 ? current.map((item, index) => (index === existingIndex ? booking : item)) : [booking, ...current];
+              });
               setAudit((current) => [
                 {
                   id: String(Date.now() + 1),
@@ -2015,13 +2024,12 @@ function StudentsPage({ tab, setTab, students, setStudents, teachers, bookings, 
 
 function BookingsPanel({ students, teachers, bookings, setBookings, audit, showToast }: { students: Student[]; teachers: Teacher[]; bookings: Booking[]; setBookings: React.Dispatch<React.SetStateAction<Booking[]>>; audit: React.Dispatch<React.SetStateAction<AuditEntry[]>>; showToast: (message: string) => void }) {
   const [open, setOpen] = useState(false);
-  const [teacherId, setTeacherId] = useState(teachers.find((teacher) => teacher.active)?.id ?? "");
-  const [assignmentIndex, setAssignmentIndex] = useState(0);
   const [query, setQuery] = useState("");
   const [studentQuery, setStudentQuery] = useState("");
   const [selectedStudentId, setSelectedStudentId] = useState("");
-  const selectedTeacher = teachers.find((teacher) => teacher.id === teacherId);
-  const selectedAssignment = selectedTeacher?.assignments[assignmentIndex] ?? selectedTeacher?.assignments[0];
+  const [selectedAssignmentKeys, setSelectedAssignmentKeys] = useState<string[]>([]);
+  const [defaultBookingFee, setDefaultBookingFee] = useState("");
+  const [manualBookingFees, setManualBookingFees] = useState<Record<string, string>>({});
   const normalized = query.trim().toLocaleLowerCase("ar");
   const active = bookings
     .filter((booking) => booking.active)
@@ -2032,12 +2040,27 @@ function BookingsPanel({ students, teachers, bookings, setBookings, audit, showT
     })
     .slice()
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || newestNumericIdFirst(left, right));
-  const studentCandidates = students.filter((student) => student.active && selectedAssignment && student.stage === selectedAssignment.stage && student.grade === selectedAssignment.grade && studentQuery.trim() && [student.name, student.phone, student.id].some((value) => value.toLocaleLowerCase("ar").includes(studentQuery.trim().toLocaleLowerCase("ar")))).slice(0, 6);
+  const studentCandidates = students.filter((student) => student.active && studentQuery.trim() && [student.name, student.phone, student.id].some((value) => value.toLocaleLowerCase("ar").includes(studentQuery.trim().toLocaleLowerCase("ar")))).slice(0, 6);
   const selectedStudent = students.find((student) => student.id === selectedStudentId);
+  const assignmentOptions = teachers
+    .filter((teacher) => teacher.active)
+    .flatMap((teacher) =>
+      teacher.assignments
+        .filter((assignment) => selectedStudent && assignment.stage === selectedStudent.stage && assignment.grade === selectedStudent.grade)
+        .map((assignment) => ({
+          key: [teacher.id, assignment.stage, assignment.grade, assignment.subject].join("\u0000"),
+          teacher,
+          assignment,
+        })),
+    );
+  const selectedOptions = assignmentOptions.filter((option) => selectedAssignmentKeys.includes(option.key));
   const closeBooking = () => {
     setOpen(false);
     setStudentQuery("");
     setSelectedStudentId("");
+    setSelectedAssignmentKeys([]);
+    setDefaultBookingFee("");
+    setManualBookingFees({});
   };
   return (
     <section className="panel data-panel">
@@ -2111,43 +2134,64 @@ function BookingsPanel({ students, teachers, bookings, setBookings, audit, showT
       </div>
       {!active.length && <EmptyState icon={<BookOpen />} title="لا توجد حجوزات مطابقة" text={query ? "غيّر كلمات البحث لعرض حجوزات أخرى" : "ابدأ بربط طالب مع المدرس المناسب"} />}
       {open && (
-        <Modal title="حجز مسبق جديد" subtitle="ابحث عن الطالب ثم اربطه بالمدرس والمادة" onClose={closeBooking}>
+        <Modal title="حجز مسبق لعدة مواد" subtitle="اختر الطالب والمواد، ثم ضع سعر الحجز الواحد مع أي استثناءات" onClose={closeBooking} wide>
           <form
             className="modal-body entity-form"
             onSubmit={(event) => {
               event.preventDefault();
-              const data = new FormData(event.currentTarget);
-              if (!selectedTeacher || !selectedAssignment || !selectedStudentId || !selectedStudent || selectedStudent.stage !== selectedAssignment.stage || selectedStudent.grade !== selectedAssignment.grade) {
-                showToast("اختر طالباً من نفس المرحلة والصف");
+              if (!selectedStudent || !selectedOptions.length) {
+                showToast("اختر الطالب ومادة واحدة على الأقل");
                 return;
               }
-              const bookingFee = Number(data.get("bookingFee"));
-              setBookings((current) => [
-                ...current,
-                {
-                  id: String(Math.max(...current.map((booking) => Number(booking.id)), 0) + 1),
-                  studentId: selectedStudentId,
-                  teacherId: selectedTeacher.id,
-                  stage: selectedAssignment.stage,
-                  grade: selectedAssignment.grade,
-                  subject: selectedAssignment.subject,
-                  bookingFee,
-                  createdAt: todayIso(),
-                  active: true,
-                },
-              ]);
+              const commonFee = Number(defaultBookingFee);
+              const preparedBookings = selectedOptions.map((option) => ({
+                option,
+                bookingFee: bookingFeeForSelection(commonFee, manualBookingFees[option.key]),
+              }));
+              if (!Number.isFinite(commonFee) || commonFee < 0 || preparedBookings.some(({ bookingFee }) => !Number.isFinite(bookingFee) || bookingFee < 0)) {
+                showToast("أدخل قيمة حجز صحيحة، والاستثناءات لا تقل عن صفر");
+                return;
+              }
+              setBookings((current) => {
+                const next = [...current];
+                let nextId = Math.max(0, ...current.map((booking) => Number(booking.id)).filter(Number.isFinite)) + 1;
+                for (const { option, bookingFee } of preparedBookings) {
+                  const existingIndex = next.findIndex(
+                    (booking) =>
+                      booking.studentId === selectedStudent.id &&
+                      booking.teacherId === option.teacher.id &&
+                      booking.stage === option.assignment.stage &&
+                      booking.grade === option.assignment.grade &&
+                      booking.subject === option.assignment.subject,
+                  );
+                  const booking: Booking = {
+                    id: existingIndex >= 0 ? next[existingIndex].id : String(nextId++),
+                    studentId: selectedStudent.id,
+                    teacherId: option.teacher.id,
+                    stage: option.assignment.stage,
+                    grade: option.assignment.grade,
+                    subject: option.assignment.subject,
+                    bookingFee,
+                    createdAt: todayIso(),
+                    active: true,
+                  };
+                  if (existingIndex >= 0) next[existingIndex] = booking;
+                  else next.push(booking);
+                }
+                return next;
+              });
               audit((current) => [
                 {
                   id: String(Date.now()),
-                  action: "إضافة حجز مسبق",
-                  details: `تم حجز ${selectedStudent.name} مع ${selectedTeacher.name} في ${selectedAssignment.subject} بقيمة ${money(bookingFee)}`,
+                  action: "إضافة حجوزات مسبقة متعددة",
+                  details: `تم حجز ${selectedStudent.name} في ${preparedBookings.length} مادة: ${preparedBookings.map(({ option, bookingFee }) => `${option.assignment.subject} مع ${option.teacher.name} (${money(bookingFee)})`).join("، ")}`,
                   time: "الآن",
                   tone: "green",
                 },
                 ...current,
               ]);
               closeBooking();
-              showToast("تم إنشاء الحجز وتسجيل قيمته");
+              showToast(`تم تسجيل ${preparedBookings.length} حجز للطالب بنجاح`);
             }}
           >
             <div className="field full booking-student-search">
@@ -2166,6 +2210,8 @@ function BookingsPanel({ students, teachers, bookings, setBookings, audit, showT
                     onClick={() => {
                       setSelectedStudentId("");
                       setStudentQuery("");
+                      setSelectedAssignmentKeys([]);
+                      setManualBookingFees({});
                     }}
                     aria-label="تغيير الطالب"
                   >
@@ -2187,6 +2233,8 @@ function BookingsPanel({ students, teachers, bookings, setBookings, audit, showT
                           onClick={() => {
                             setSelectedStudentId(student.id);
                             setStudentQuery(student.name);
+                            setSelectedAssignmentKeys([]);
+                            setManualBookingFees({});
                           }}
                         >
                           <span>{student.name.charAt(0)}</span>
@@ -2205,42 +2253,59 @@ function BookingsPanel({ students, teachers, bookings, setBookings, audit, showT
               )}
             </div>
             <label className="field full">
-              المدرس
-              <select
-                value={teacherId}
-                onChange={(event) => {
-                  setTeacherId(event.target.value);
-                  setAssignmentIndex(0);
-                }}
-              >
-                {teachers
-                  .filter((teacher) => teacher.active)
-                  .map((teacher) => (
-                    <option key={teacher.id} value={teacher.id}>
-                      {teacher.name}
-                    </option>
-                  ))}
-              </select>
+              قيمة الحجز الموحّدة لكل مادة
+              <input value={defaultBookingFee} onChange={(event) => setDefaultBookingFee(event.target.value)} type="number" min="0" required placeholder="مثال: 15" />
             </label>
-            <label className="field full">
-              المرحلة والصف والمادة
-              <select value={assignmentIndex} onChange={(event) => setAssignmentIndex(Number(event.target.value))}>
-                {selectedTeacher?.assignments.map((assignment, index) => (
-                  <option value={index} key={`${assignment.stage}-${assignment.grade}-${assignment.subject}`}>
-                    {assignment.stage} — {assignment.grade} — {assignment.subject}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="field full">
-              قيمة الحجز
-              <input name="bookingFee" type="number" min="0" required placeholder="مثال: 200" />
-            </label>
+            <div className="field full">
+              <span>المواد والمدرسون</span>
+              {selectedStudent ? (
+                assignmentOptions.length ? (
+                  <div className="multi-booking-options">
+                    {assignmentOptions.map((option) => {
+                      const selected = selectedAssignmentKeys.includes(option.key);
+                      return (
+                        <div className={`multi-booking-row ${selected ? "selected" : ""}`} key={option.key}>
+                          <label>
+                            <input
+                              type="checkbox"
+                              checked={selected}
+                              onChange={(event) =>
+                                setSelectedAssignmentKeys((current) => (event.target.checked ? [...current, option.key] : current.filter((key) => key !== option.key)))
+                              }
+                            />
+                            <span>
+                              <strong>{option.assignment.subject}</strong>
+                              <small>{option.teacher.name} · {option.assignment.stage} · {option.assignment.grade}</small>
+                            </span>
+                          </label>
+                          <label className="manual-booking-fee">
+                            سعر مختلف (اختياري)
+                            <input
+                              type="number"
+                              min="0"
+                              disabled={!selected}
+                              value={manualBookingFees[option.key] ?? ""}
+                              onChange={(event) => setManualBookingFees((current) => ({ ...current, [option.key]: event.target.value }))}
+                              placeholder={defaultBookingFee || "نفس السعر الموحّد"}
+                              aria-label={`سعر حجز مختلف لمادة ${option.assignment.subject} مع ${option.teacher.name}`}
+                            />
+                          </label>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="form-error">لا يوجد مدرس نشط مسجل لهذا الصف حتى الآن</div>
+                )
+              ) : (
+                <div className="booking-selection-placeholder">اختر الطالب أولًا لعرض المواد والمدرسين المطابقين لمرحلته وصفه.</div>
+              )}
+            </div>
             <div className="info-note full">
-              <CircleDollarSign size={18} /> قيمة الحجز مستقلة عن الحصص ولا تدخل في حساب مستحق المدرس أو صافي الحصة.
+              <CircleDollarSign size={18} /> السعر الموحّد يُسجل كاملًا على كل مادة مختارة. السعر المختلف يستبدله لهذه المادة فقط، وقيم الحجوزات مستقلة عن حساب الحصص.
             </div>
             <button className="primary-btn full" type="submit">
-              تأكيد الحجز
+              تأكيد {selectedOptions.length || ""} {selectedOptions.length === 1 ? "حجز" : "حجوزات"}
             </button>
           </form>
         </Modal>
@@ -2864,7 +2929,7 @@ function CreateSessionModal({ teachers, pricing, sessions, rooms, onClose, onCre
   const [assignmentIndex, setAssignmentIndex] = useState(0);
   const [conflictError, setConflictError] = useState("");
   const assignment = teacher?.assignments[assignmentIndex] ?? teacher?.assignments[0];
-  const rule = pricing.find((item) => item.stage === assignment?.stage && item.grade === assignment?.grade && item.subject === assignment?.subject);
+  const rule = findTeacherPriceRule(pricing, teacherId, assignment);
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
@@ -2972,7 +3037,7 @@ function EditSessionModal({ session, teachers, pricing, sessions, rooms, onClose
   const [room, setRoom] = useState(session.room);
   const [conflictError, setConflictError] = useState("");
   const assignment = teacher?.assignments[assignmentIndex] ?? teacher?.assignments[0];
-  const rule = pricing.find((item) => item.stage === assignment?.stage && item.grade === assignment?.grade && item.subject === assignment?.subject);
+  const rule = findTeacherPriceRule(pricing, teacherId, assignment);
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!assignment) return;
@@ -3551,7 +3616,7 @@ function AdminPage({ tab, setTab, pricing, setPricing, sessions, bookings, expen
         })}
       </aside>
       <section className="admin-content">
-        {tab === "pricing" && <PricingPanel pricing={pricing} setPricing={setPricing} subjectCatalog={subjectCatalog} audit={setAudit} showToast={showToast} />}
+        {tab === "pricing" && <PricingPanel pricing={pricing} setPricing={setPricing} teachers={teachers} audit={setAudit} showToast={showToast} />}
         {tab === "archive" && <ArchivePanel sessions={sessions} debtPayments={debtPayments} students={students} teachers={teachers} />}
         {tab === "teacherArchive" && <TeacherArchivePanel teachers={teachers} sessions={sessions} onRestore={onRestoreTeacher} />}
         {tab === "analytics" && <AnalyticsPanel sessions={sessions} bookings={bookings} expenses={expenses} debtPayments={debtPayments} teachers={teachers} />}
@@ -3642,26 +3707,27 @@ function TeacherArchivePanel({ teachers, sessions, onRestore }: { teachers: Teac
   );
 }
 
-function PricingPanel({ pricing, setPricing, subjectCatalog, audit, showToast }: { pricing: PriceRule[]; setPricing: React.Dispatch<React.SetStateAction<PriceRule[]>>; subjectCatalog: Record<Stage, string[]>; audit: React.Dispatch<React.SetStateAction<AuditEntry[]>>; showToast: (message: string) => void }) {
+function PricingPanel({ pricing, setPricing, teachers, audit, showToast }: { pricing: PriceRule[]; setPricing: React.Dispatch<React.SetStateAction<PriceRule[]>>; teachers: Teacher[]; audit: React.Dispatch<React.SetStateAction<AuditEntry[]>>; showToast: (message: string) => void }) {
   const [open, setOpen] = useState(false);
   const [editingRule, setEditingRule] = useState<PriceRule | null>(null);
   const [deletingRule, setDeletingRule] = useState<PriceRule | null>(null);
-  const [priceStage, setPriceStage] = useState<Stage>("المرحلة الإعدادية");
-  const [priceGrade, setPriceGrade] = useState(gradesByStage["المرحلة الإعدادية"][0]);
-  const [priceSubject, setPriceSubject] = useState(initialSubjectsByStage["المرحلة الإعدادية"][0]);
+  const firstPricedTeacher = teachers.find((teacher) => teacher.active && teacher.assignments.length > 0);
+  const [priceTeacherId, setPriceTeacherId] = useState(firstPricedTeacher?.id ?? "");
+  const [priceAssignmentIndex, setPriceAssignmentIndex] = useState(0);
+  const priceTeacher = teachers.find((teacher) => teacher.id === priceTeacherId);
+  const priceAssignment = priceTeacher?.assignments[priceAssignmentIndex] ?? priceTeacher?.assignments[0];
   const openNewRule = () => {
-    const stage: Stage = "المرحلة الإعدادية";
+    const teacher = teachers.find((item) => item.active && item.assignments.length > 0);
     setEditingRule(null);
-    setPriceStage(stage);
-    setPriceGrade(gradesByStage[stage][0]);
-    setPriceSubject(subjectCatalog[stage][0]);
+    setPriceTeacherId(teacher?.id ?? "");
+    setPriceAssignmentIndex(0);
     setOpen(true);
   };
   const openEditRule = (rule: PriceRule) => {
+    const teacher = teachers.find((item) => item.id === rule.teacherId);
     setEditingRule(rule);
-    setPriceStage(rule.stage);
-    setPriceGrade(rule.grade);
-    setPriceSubject(rule.subject);
+    setPriceTeacherId(rule.teacherId || teacher?.id || "");
+    setPriceAssignmentIndex(Math.max(teacher?.assignments.findIndex((assignment) => assignment.stage === rule.stage && assignment.grade === rule.grade && assignment.subject === rule.subject) ?? 0, 0));
     setOpen(true);
   };
   const closeEditor = () => {
@@ -3673,7 +3739,7 @@ function PricingPanel({ pricing, setPricing, subjectCatalog, audit, showToast }:
       <div className="data-toolbar">
         <div>
           <h2>أسعار الحصص</h2>
-          <p>سعر الطالب وأجر المدرس لكل حضور حسب المرحلة والصف والمادة</p>
+          <p>سعر الطالب وأجر كل مدرس لكل حضور حسب مرحلته وصفه ومادته</p>
         </div>
         <button className="primary-btn" onClick={openNewRule}>
           <Plus size={18} /> إضافة سعر
@@ -3686,6 +3752,7 @@ function PricingPanel({ pricing, setPricing, subjectCatalog, audit, showToast }:
               <th>المرحلة</th>
               <th>الصف</th>
               <th>المادة</th>
+              <th>المدرس</th>
               <th>سعر الطالب</th>
               <th>أجر المدرس / طالب</th>
               <th>صافي السنتر / طالب</th>
@@ -3703,6 +3770,7 @@ function PricingPanel({ pricing, setPricing, subjectCatalog, audit, showToast }:
                     <strong>{rule.grade}</strong>
                   </td>
                   <td>{rule.subject}</td>
+                  <td>{teachers.find((teacher) => teacher.id === rule.teacherId)?.name ?? "غير مرتبط بمدرس"}</td>
                   <td>
                     <span className="money-main">{money(rule.studentPrice)}</span>
                   </td>
@@ -3734,20 +3802,25 @@ function PricingPanel({ pricing, setPricing, subjectCatalog, audit, showToast }:
               const data = new FormData(event.currentTarget);
               const studentPrice = Number(data.get("price"));
               const teacherFee = Number(data.get("fee"));
+              if (!priceTeacher || !priceAssignment) {
+                showToast("اختر مدرساً وتخصصاً مسجلاً له");
+                return;
+              }
               if (teacherFee > studentPrice) {
                 showToast("أجر المدرس لا يمكن أن يتجاوز سعر الطالب");
                 return;
               }
-              const duplicate = pricing.some((rule) => rule.id !== editingRule?.id && rule.stage === priceStage && rule.grade === priceGrade && rule.subject === priceSubject);
+              const duplicate = pricing.some((rule) => rule.id !== editingRule?.id && rule.teacherId === priceTeacher.id && rule.stage === priceAssignment.stage && rule.grade === priceAssignment.grade && rule.subject === priceAssignment.subject);
               if (duplicate) {
-                showToast("يوجد سعر مسجل بالفعل لنفس المرحلة والصف والمادة");
+                showToast("يوجد سعر مسجل بالفعل لنفس المدرس والمرحلة والصف والمادة");
                 return;
               }
               const updatedRule = {
                 id: editingRule?.id ?? String(Math.max(...pricing.map((rule) => Number(rule.id)), 0) + 1),
-                stage: priceStage,
-                grade: priceGrade,
-                subject: priceSubject,
+                teacherId: priceTeacher.id,
+                stage: priceAssignment.stage,
+                grade: priceAssignment.grade,
+                subject: priceAssignment.subject,
                 studentPrice,
                 teacherFee,
               };
@@ -3756,7 +3829,7 @@ function PricingPanel({ pricing, setPricing, subjectCatalog, audit, showToast }:
                 {
                   id: String(Date.now()),
                   action: editingRule ? "تعديل سعر حصة" : "إضافة سعر حصة",
-                  details: `${priceSubject} — ${priceGrade} — سعر الطالب ${money(studentPrice)} وأجر المدرس ${money(teacherFee)}`,
+                  details: `${priceTeacher.name} — ${priceAssignment.subject} — ${priceAssignment.grade} — سعر الطالب ${money(studentPrice)} وأجر المدرس ${money(teacherFee)}`,
                   time: "الآن",
                   tone: "blue",
                 },
@@ -3766,35 +3839,27 @@ function PricingPanel({ pricing, setPricing, subjectCatalog, audit, showToast }:
               showToast(editingRule ? "تم تحديث سعر الحصة" : "تمت إضافة السعر الجديد");
             }}
           >
-            <label className="field">
-              المرحلة
+            <label className="field full">
+              المدرس
               <select
-                value={priceStage}
+                value={priceTeacherId}
                 onChange={(event) => {
-                  const stage = event.target.value as Stage;
-                  setPriceStage(stage);
-                  setPriceGrade(gradesByStage[stage][0]);
-                  setPriceSubject(subjectCatalog[stage][0]);
+                  setPriceTeacherId(event.target.value);
+                  setPriceAssignmentIndex(0);
                 }}
               >
-                {stages.map((stage) => (
-                  <option key={stage}>{stage}</option>
+                {teachers.filter((teacher) => (teacher.active || teacher.id === editingRule?.teacherId) && teacher.assignments.length > 0).map((teacher) => (
+                  <option key={teacher.id} value={teacher.id}>{teacher.name}</option>
                 ))}
               </select>
             </label>
-            <label className="field">
-              الصف
-              <select name="grade" value={priceGrade} onChange={(event) => setPriceGrade(event.target.value)}>
-                {gradesByStage[priceStage].map((grade) => (
-                  <option key={grade}>{grade}</option>
-                ))}
-              </select>
-            </label>
-            <label className="field">
-              المادة
-              <select name="subject" value={priceSubject} onChange={(event) => setPriceSubject(event.target.value)}>
-                {subjectCatalog[priceStage].map((subject) => (
-                  <option key={subject}>{subject}</option>
+            <label className="field full">
+              المرحلة والصف والمادة المسجلة للمدرس
+              <select value={priceAssignmentIndex} onChange={(event) => setPriceAssignmentIndex(Number(event.target.value))}>
+                {priceTeacher?.assignments.map((assignment, index) => (
+                  <option key={`${assignment.stage}-${assignment.grade}-${assignment.subject}`} value={index}>
+                    {assignment.stage} — {assignment.grade} — {assignment.subject}
+                  </option>
                 ))}
               </select>
             </label>
@@ -3822,7 +3887,7 @@ function PricingPanel({ pricing, setPricing, subjectCatalog, audit, showToast }:
                   {deletingRule.subject} — {deletingRule.grade}
                 </strong>
                 <span>
-                  {deletingRule.stage} · سعر الطالب {money(deletingRule.studentPrice)}
+                  {teachers.find((teacher) => teacher.id === deletingRule.teacherId)?.name ?? "مدرس غير مرتبط"} · {deletingRule.stage} · سعر الطالب {money(deletingRule.studentPrice)}
                 </span>
               </div>
             </div>
@@ -3839,7 +3904,7 @@ function PricingPanel({ pricing, setPricing, subjectCatalog, audit, showToast }:
                   {
                     id: String(Date.now()),
                     action: "حذف سعر حصة",
-                    details: `${deletingRule.subject} — ${deletingRule.grade} — ${deletingRule.stage}`,
+                    details: `${teachers.find((teacher) => teacher.id === deletingRule.teacherId)?.name ?? deletingRule.teacherId} — ${deletingRule.subject} — ${deletingRule.grade} — ${deletingRule.stage}`,
                     time: "الآن",
                     tone: "orange",
                   },
