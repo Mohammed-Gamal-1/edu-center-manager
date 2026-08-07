@@ -37,7 +37,7 @@ test("server-renders the secure Arabic application shell", async () => {
 });
 
 test("keeps cloud persistence, offline recovery, and admin auth protections in place", async () => {
-  const [centerApp, stateRoute, serverAuth, supabaseRest, migration, safetyMigration, authMigration, persistentRecoveryMigration, relationalSyncMigration] = await Promise.all([
+  const [centerApp, stateRoute, serverAuth, supabaseRest, migration, safetyMigration, authMigration, persistentRecoveryMigration, relationalSyncMigration, teacherPricingMigration] = await Promise.all([
     readFile(new URL("../app/CenterApp.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/state/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/server-auth.ts", import.meta.url), "utf8"),
@@ -47,6 +47,7 @@ test("keeps cloud persistence, offline recovery, and admin auth protections in p
     readFile(new URL("../supabase/migrations/003_database_auth.sql", import.meta.url), "utf8"),
     readFile(new URL("../supabase/migrations/004_persistent_recovery_code.sql", import.meta.url), "utf8"),
     readFile(new URL("../supabase/migrations/005_sync_snapshot_to_relational.sql", import.meta.url), "utf8"),
+    readFile(new URL("../supabase/migrations/007_teacher_specific_pricing_and_bulk_bookings.sql", import.meta.url), "utf8"),
   ]);
 
   assert.match(centerApp, /eltafawoq\.pending-state\.v3/);
@@ -91,4 +92,13 @@ test("keeps cloud persistence, offline recovery, and admin auth protections in p
   assert.match(relationalSyncMigration, /update public\.subjects set active = false where true/i);
   assert.match(relationalSyncMigration, /delete from public\.teacher_assignments where true/i);
   assert.match(relationalSyncMigration, /delete from public\.session_attendance where true/i);
+  assert.match(teacherPricingMigration, /add column if not exists teacher_id/i);
+  assert.match(teacherPricingMigration, /one_active_price_per_teacher_grade_subject/i);
+  assert.match(teacherPricingMigration, /jsonb_build_object\(\s*'teacherId'/i);
+  assert.match(teacherPricingMigration, /on conflict \(teacher_id, grade_id, subject_id\)/i);
+  assert.match(teacherPricingMigration, /version\s*=\s*state_row\.version\s*\+\s*1/i);
+  assert.ok(
+    teacherPricingMigration.indexOf("create or replace function public.sync_center_state_to_relational") < teacherPricingMigration.lastIndexOf("update public.center_state as state_row"),
+    "the teacher-aware sync function must be replaced before the snapshot backfill runs",
+  );
 });

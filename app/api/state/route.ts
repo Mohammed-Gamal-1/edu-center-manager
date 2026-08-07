@@ -1,4 +1,4 @@
-import { emptyCenterState, findActiveStudentStateConflict, findCenterStateBusinessConflict, isCenterStatePayload } from "../../../lib/center-state";
+import { emptyCenterState, findActiveStudentStateConflict, findCenterStateBusinessConflict, isCenterStatePayload, normalizeCenterStatePricing } from "../../../lib/center-state";
 import { sessionFromRequest } from "../../../lib/server-auth";
 import { supabaseInsert, supabaseQuery, supabaseUpdate } from "../../../lib/supabase-rest";
 
@@ -8,6 +8,8 @@ type StateRow = {
   version: number;
   updated_at: string;
 };
+
+const normalizedPersistedState = (value: unknown) => (isCenterStatePayload(value) ? normalizeCenterStatePricing(value) : value);
 
 export async function GET(request: Request) {
   const session = await sessionFromRequest(request);
@@ -22,7 +24,7 @@ export async function GET(request: Request) {
     return Response.json(
       {
         ok: true,
-        state: row?.data ?? emptyCenterState,
+        state: normalizedPersistedState(row?.data ?? emptyCenterState),
         version: row?.version ?? 0,
         updatedAt: row?.updated_at ?? null,
       },
@@ -50,27 +52,29 @@ export async function PUT(request: Request) {
     });
     const current = currentRows[0];
     const currentVersion = current?.version ?? 0;
-    const studentConflict = findActiveStudentStateConflict(body.state);
+    const nextState = normalizeCenterStatePricing(body.state);
+    const currentState = normalizedPersistedState(current?.data ?? emptyCenterState);
+    const studentConflict = findActiveStudentStateConflict(nextState);
     if (studentConflict) {
       return Response.json(
         {
           ok: false,
           error: `الطالب ${studentConflict.studentId} مسجل بالفعل في حصة شغالة أخرى`,
           conflict: true,
-          state: current?.data ?? emptyCenterState,
+          state: currentState,
           version: currentVersion,
         },
         { status: 409 },
       );
     }
-    const businessConflict = findCenterStateBusinessConflict(body.state);
+    const businessConflict = findCenterStateBusinessConflict(nextState);
     if (businessConflict) {
       return Response.json(
         {
           ok: false,
           error: businessConflict.message,
           conflict: true,
-          state: current?.data ?? emptyCenterState,
+          state: currentState,
           version: currentVersion,
         },
         { status: 409 },
@@ -82,7 +86,7 @@ export async function PUT(request: Request) {
           ok: false,
           error: "تم تعديل البيانات من جهاز آخر",
           conflict: true,
-          state: current?.data ?? emptyCenterState,
+          state: currentState,
           version: currentVersion,
         },
         { status: 409 },
@@ -91,7 +95,7 @@ export async function PUT(request: Request) {
     const nextVersion = currentVersion + 1;
     const payload = {
       id: 1,
-      data: body.state,
+      data: nextState,
       version: nextVersion,
       updated_at: new Date().toISOString(),
     };
@@ -117,7 +121,7 @@ export async function PUT(request: Request) {
           ok: false,
           error: "تم تعديل البيانات من جهاز آخر",
           conflict: true,
-          state: latest?.data ?? emptyCenterState,
+          state: normalizedPersistedState(latest?.data ?? emptyCenterState),
           version: latest?.version ?? 0,
         },
         { status: 409 },

@@ -143,6 +143,7 @@ const testTeacher = {
 };
 const testPrice = {
   id: ids.price,
+  teacherId: ids.teacher,
   stage,
   grade,
   subject: testSubject,
@@ -233,7 +234,7 @@ try {
   const [teacherRow] = await supabase(`teachers?id=eq.${ids.teacher}&select=id,full_name,phone,active`);
   const assignments = await supabase(`teacher_assignments?teacher_id=eq.${ids.teacher}&select=teacher_id,active`);
   const [subjectRow] = await supabase(`subjects?name=eq.${encodeURIComponent(testSubject)}&select=id,name,active`);
-  const [priceRow] = await supabase(`price_rules?subject_id=eq.${subjectRow.id}&active=eq.true&select=id,student_price,teacher_fee_per_student`);
+  const [priceRow] = await supabase(`price_rules?subject_id=eq.${subjectRow.id}&teacher_id=eq.${ids.teacher}&active=eq.true&select=id,teacher_id,student_price,teacher_fee_per_student`);
   const [bookingRow] = await supabase(`advance_bookings?id=eq.${ids.booking}&select=id,booking_fee,active`);
   const [sessionRow] = await supabase(`lesson_sessions?id=eq.${ids.session}&select=id,status,student_price_snapshot,teacher_fee_snapshot`);
   const [attendanceRow] = await supabase(`session_attendance?session_id=eq.${ids.session}&student_id=eq.${ids.student}&select=paid_cash`);
@@ -246,6 +247,7 @@ try {
   assert.equal(assignments.length, 1);
   assert.equal(subjectRow.active, true);
   assert.equal(Number(priceRow.student_price), 100);
+  assert.equal(String(priceRow.teacher_id), ids.teacher);
   assert.equal(Number(bookingRow.booking_fee), 25);
   assert.equal(sessionRow.status, "scheduled");
   assert.equal(Number(attendanceRow.paid_cash), 60);
