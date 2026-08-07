@@ -46,6 +46,94 @@ export function isCenterStatePayload(value: unknown): value is CenterStatePayloa
 
 const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 
+export type SubjectCatalogEntry = {
+  stage: string;
+  subject: string;
+};
+
+export type SubjectCatalogDeletionConflict = {
+  kind: "last-subject" | "teacher-assignment" | "price-rule" | "active-booking" | "open-session";
+  message: string;
+};
+
+type SubjectUsageState = Pick<CenterStatePayload, "teachers" | "pricing" | "sessions" | "bookings">;
+
+const subjectReferenceMatches = (value: unknown, stage: string, subject: string) => {
+  if (!isRecord(value)) return false;
+  return String(value.stage ?? "") === stage && String(value.subject ?? "") === subject;
+};
+
+export function removedSubjectCatalogEntries(currentState: CenterStatePayload, nextState: CenterStatePayload): SubjectCatalogEntry[] {
+  const removed: SubjectCatalogEntry[] = [];
+  for (const [stage, rawSubjects] of Object.entries(currentState.subjectCatalog)) {
+    if (!Array.isArray(rawSubjects)) continue;
+    const nextSubjects = Array.isArray(nextState.subjectCatalog[stage]) ? nextState.subjectCatalog[stage] : [];
+    for (const rawSubject of rawSubjects) {
+      if (typeof rawSubject !== "string" || nextSubjects.includes(rawSubject)) continue;
+      removed.push({ stage, subject: rawSubject });
+    }
+  }
+  return removed;
+}
+
+export function findSubjectUsageConflict(state: SubjectUsageState, stage: string, subject: string): SubjectCatalogDeletionConflict | null {
+  for (const rawTeacher of state.teachers) {
+    if (!isRecord(rawTeacher) || !Array.isArray(rawTeacher.assignments)) continue;
+    if (rawTeacher.assignments.some((assignment) => subjectReferenceMatches(assignment, stage, subject))) {
+      const teacherName = String(rawTeacher.name ?? rawTeacher.id ?? "المدرس");
+      return {
+        kind: "teacher-assignment",
+        message: `لا يمكن حذف ${subject} لأنها مسجلة ضمن مواد المدرس ${teacherName}. احذفها من بيانات المدرس أولاً.`,
+      };
+    }
+  }
+
+  if (state.pricing.some((rule) => subjectReferenceMatches(rule, stage, subject))) {
+    return {
+      kind: "price-rule",
+      message: `لا يمكن حذف ${subject} لأن لها سعر حصة مسجلاً. احذف سعرها أولاً.`,
+    };
+  }
+
+  if (state.bookings.some((booking) => subjectReferenceMatches(booking, stage, subject) && isRecord(booking) && booking.active !== false)) {
+    return {
+      kind: "active-booking",
+      message: `لا يمكن حذف ${subject} لأن لها حجزاً مسبقاً نشطاً. قم بأرشفة الحجز أولاً.`,
+    };
+  }
+
+  if (
+    state.sessions.some((session) => {
+      if (!subjectReferenceMatches(session, stage, subject) || !isRecord(session)) return false;
+      return !["ended", "cancelled"].includes(String(session.status ?? ""));
+    })
+  ) {
+    return {
+      kind: "open-session",
+      message: `لا يمكن حذف ${subject} لأن لها حصة حالية أو قادمة. أنهِ الحصة أو ألغها أولاً.`,
+    };
+  }
+
+  return null;
+}
+
+export function findSubjectCatalogDeletionConflict(currentState: CenterStatePayload, nextState: CenterStatePayload): SubjectCatalogDeletionConflict | null {
+  const removedSubjects = removedSubjectCatalogEntries(currentState, nextState);
+  for (const { stage, subject } of removedSubjects) {
+    const currentSubjects = Array.isArray(currentState.subjectCatalog[stage]) ? currentState.subjectCatalog[stage] : [];
+    const nextSubjects = Array.isArray(nextState.subjectCatalog[stage]) ? nextState.subjectCatalog[stage] : [];
+    if (currentSubjects.length > 0 && nextSubjects.length === 0) {
+      return {
+        kind: "last-subject",
+        message: `لا يمكن حذف آخر مادة في ${stage}. أضف مادة بديلة أولاً.`,
+      };
+    }
+    const usageConflict = findSubjectUsageConflict(currentState, stage, subject);
+    if (usageConflict) return usageConflict;
+  }
+  return null;
+}
+
 export function normalizeCenterStatePricing(state: CenterStatePayload): CenterStatePayload {
   const teachers: TeacherIdentity[] = [];
   for (const rawTeacher of state.teachers) {

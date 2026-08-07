@@ -60,9 +60,13 @@ test("keeps cloud persistence, offline recovery, and admin auth protections in p
   assert.match(centerApp, /type="date"[\s\S]{0,160}value=\{customDateFrom\}[\s\S]{0,160}onInput=/);
   assert.match(centerApp, /استخدام النسخة السحابية/);
   assert.match(centerApp, /حفظ نسخة هذا الجهاز/);
+  assert.match(centerApp, /aria-label=\{`حذف مادة \$\{subject\}`\}/);
+  assert.match(centerApp, /تأكيد حذف المادة/);
+  assert.match(centerApp, /findSubjectUsageConflict/);
   assert.match(stateRoute, /baseVersion/);
   assert.match(stateRoute, /status:\s*409/);
   assert.match(stateRoute, /version:\s*`eq\.\$\{currentVersion\}`/);
+  assert.match(stateRoute, /findSubjectCatalogDeletionConflict/);
   assert.match(serverAuth, /verify_admin_credentials/);
   assert.match(serverAuth, /HttpOnly; Secure; SameSite=Strict/);
   assert.match(supabaseRest, /SUPABASE_SERVICE_ROLE_KEY/);

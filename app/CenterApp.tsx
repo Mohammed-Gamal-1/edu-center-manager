@@ -6,6 +6,7 @@ import { allocateDebtPayment, calculateAnalyticsProfit, DebtPaymentRecord, getSe
 import { bookingFeeForSelection, findTeacherPriceRule, linkLegacyPriceRulesToTeachers } from "../lib/center-pricing";
 import { findActiveStudentConflict, hasMatchingBooking, isStudentInSessionGrade, nextStudentIdForStage } from "../lib/center-rules";
 import { downloadAnalyticsExcel, type AnalyticsExcelExport } from "../lib/analytics-excel";
+import { findSubjectUsageConflict } from "../lib/center-state";
 
 type View = "dashboard" | "students" | "teachers" | "sessions" | "expenses" | "admin";
 type StudentTab = "register" | "bookings" | "records" | "debts";
@@ -3621,7 +3622,7 @@ function AdminPage({ tab, setTab, pricing, setPricing, sessions, bookings, expen
         {tab === "teacherArchive" && <TeacherArchivePanel teachers={teachers} sessions={sessions} onRestore={onRestoreTeacher} />}
         {tab === "analytics" && <AnalyticsPanel sessions={sessions} bookings={bookings} expenses={expenses} debtPayments={debtPayments} teachers={teachers} />}
         {tab === "audit" && <AuditPanel audit={audit} />}
-        {tab === "settings" && <SettingsPanel subjectCatalog={subjectCatalog} setSubjectCatalog={setSubjectCatalog} rooms={rooms} currentUsername={currentUsername} onCredentialsChanged={onCredentialsChanged} onAddRoom={onAddRoom} onRenameRoom={onRenameRoom} audit={setAudit} showToast={showToast} />}
+        {tab === "settings" && <SettingsPanel subjectCatalog={subjectCatalog} setSubjectCatalog={setSubjectCatalog} teachers={teachers} pricing={pricing} sessions={sessions} bookings={bookings} rooms={rooms} currentUsername={currentUsername} onCredentialsChanged={onCredentialsChanged} onAddRoom={onAddRoom} onRenameRoom={onRenameRoom} audit={setAudit} showToast={showToast} />}
       </section>
     </div>
   );
@@ -4949,13 +4950,14 @@ function AuditPanel({ audit }: { audit: AuditEntry[] }) {
   );
 }
 
-function SettingsPanel({ subjectCatalog, setSubjectCatalog, rooms, currentUsername, onCredentialsChanged, onAddRoom, onRenameRoom, audit, showToast }: { subjectCatalog: Record<Stage, string[]>; setSubjectCatalog: React.Dispatch<React.SetStateAction<Record<Stage, string[]>>>; rooms: string[]; currentUsername: string; onCredentialsChanged: (username: string) => void; onAddRoom: (room: string) => void; onRenameRoom: (index: number, room: string) => void; audit: React.Dispatch<React.SetStateAction<AuditEntry[]>>; showToast: (message: string) => void }) {
+function SettingsPanel({ subjectCatalog, setSubjectCatalog, teachers, pricing, sessions, bookings, rooms, currentUsername, onCredentialsChanged, onAddRoom, onRenameRoom, audit, showToast }: { subjectCatalog: Record<Stage, string[]>; setSubjectCatalog: React.Dispatch<React.SetStateAction<Record<Stage, string[]>>>; teachers: Teacher[]; pricing: PriceRule[]; sessions: LessonSession[]; bookings: Booking[]; rooms: string[]; currentUsername: string; onCredentialsChanged: (username: string) => void; onAddRoom: (room: string) => void; onRenameRoom: (index: number, room: string) => void; audit: React.Dispatch<React.SetStateAction<AuditEntry[]>>; showToast: (message: string) => void }) {
   const [username, setUsername] = useState(currentUsername);
   const [credentialsSaving, setCredentialsSaving] = useState(false);
   const [recoveryCode, setRecoveryCode] = useState("");
   const [recoveryCodeLoading, setRecoveryCodeLoading] = useState(false);
   const [subjectStage, setSubjectStage] = useState<Stage>("المرحلة الإعدادية");
   const [newSubject, setNewSubject] = useState("");
+  const [deletingSubject, setDeletingSubject] = useState<{ stage: Stage; subject: string } | null>(null);
   const [roomEditor, setRoomEditor] = useState<{
     index: number | null;
     value: string;
@@ -5029,9 +5031,53 @@ function SettingsPanel({ subjectCatalog, setSubjectCatalog, rooms, currentUserna
       setRecoveryCodeLoading(false);
     }
   };
+  const requestSubjectDeletion = (stage: Stage, subject: string) => {
+    if (subjectCatalog[stage].length <= 1) {
+      showToast(`لا يمكن حذف آخر مادة في ${stage}. أضف مادة بديلة أولاً.`);
+      return;
+    }
+    const conflict = findSubjectUsageConflict({ teachers, pricing, sessions, bookings }, stage, subject);
+    if (conflict) {
+      showToast(conflict.message);
+      return;
+    }
+    setDeletingSubject({ stage, subject });
+  };
+  const confirmSubjectDeletion = () => {
+    if (!deletingSubject) return;
+    const { stage, subject } = deletingSubject;
+    if (subjectCatalog[stage].length <= 1) {
+      setDeletingSubject(null);
+      showToast(`لا يمكن حذف آخر مادة في ${stage}. أضف مادة بديلة أولاً.`);
+      return;
+    }
+    const conflict = findSubjectUsageConflict({ teachers, pricing, sessions, bookings }, stage, subject);
+    if (conflict) {
+      setDeletingSubject(null);
+      showToast(conflict.message);
+      return;
+    }
+    setSubjectCatalog((current) => ({
+      ...current,
+      [stage]: current[stage].filter((item) => item !== subject),
+    }));
+    audit((current) => [
+      {
+        id: String(Date.now()),
+        action: "حذف مادة",
+        details: `تم حذف ${subject} من ${stage} مع الاحتفاظ بالسجلات التاريخية`,
+        time: "الآن",
+        tone: "orange",
+      },
+      ...current,
+    ]);
+    setDeletingSubject(null);
+    showToast("تم حذف المادة مع الاحتفاظ بالسجلات التاريخية");
+  };
   return (
-    <div className="settings-stack">
-      <section className="panel settings-section">
+    <>
+      <div className="settings-stack">
+        <section className="panel settings-section">
         <div className="settings-icon">
           <LockKeyhole size={21} />
         </div>
@@ -5052,7 +5098,7 @@ function SettingsPanel({ subjectCatalog, setSubjectCatalog, rooms, currentUserna
             {credentialsSaving ? "جاري الحفظ…" : "حفظ التغييرات"}
           </button>
         </form>
-      </section>
+        </section>
       <section className="panel settings-section recovery-settings">
         <div className="settings-icon recovery">
           <ShieldCheck size={21} />
@@ -5142,7 +5188,12 @@ function SettingsPanel({ subjectCatalog, setSubjectCatalog, rooms, currentUserna
           </label>
           <div className="subject-tags">
             {subjectCatalog[subjectStage].map((subject) => (
-              <span key={subject}>{subject}</span>
+              <span key={subject} className="subject-tag">
+                {subject}
+                <button type="button" onClick={() => requestSubjectDeletion(subjectStage, subject)} aria-label={`حذف مادة ${subject}`} title={`حذف ${subject}`}>
+                  <Trash2 size={14} />
+                </button>
+              </span>
             ))}
           </div>
           <form
@@ -5182,14 +5233,36 @@ function SettingsPanel({ subjectCatalog, setSubjectCatalog, rooms, currentUserna
           </form>
         </div>
       </section>
-      <section className="cloud-card">
+        <section className="cloud-card">
         <ShieldCheck size={26} />
         <div>
           <h3>قاعدة البيانات السحابية</h3>
           <p>كل تغيير يُحفظ أولاً على الجهاز كنسخة انتظار ثم يُزامن تلقائياً مع Supabase PostgreSQL.</p>
         </div>
         <span>حفظ مزدوج آمن</span>
-      </section>
-    </div>
+        </section>
+      </div>
+      {deletingSubject && (
+        <Modal title="حذف المادة" subtitle="راجع المادة والمرحلة قبل تأكيد الحذف" onClose={() => setDeletingSubject(null)}>
+          <div className="modal-body">
+            <div className="delete-review">
+              <Trash2 size={22} />
+              <div>
+                <strong>{deletingSubject.subject}</strong>
+                <span>{deletingSubject.stage} · لن تُحذف أي حصة منتهية أو حجز مؤرشف من السجلات التاريخية.</span>
+              </div>
+            </div>
+          </div>
+          <div className="modal-actions">
+            <button className="secondary-btn" onClick={() => setDeletingSubject(null)}>
+              إلغاء
+            </button>
+            <button className="danger-confirm" onClick={confirmSubjectDeletion}>
+              تأكيد حذف المادة
+            </button>
+          </div>
+        </Modal>
+      )}
+    </>
   );
 }

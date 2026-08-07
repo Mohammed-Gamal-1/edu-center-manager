@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { emptyCenterState, findActiveStudentStateConflict, findCenterStateBusinessConflict } from "../lib/center-state.ts";
+import { emptyCenterState, findActiveStudentStateConflict, findCenterStateBusinessConflict, findSubjectCatalogDeletionConflict, findSubjectUsageConflict, removedSubjectCatalogEntries } from "../lib/center-state.ts";
 
 const session = (id: string, status: string, studentIds: string[]) => ({
   id,
@@ -116,4 +116,80 @@ test("rejects duplicate bulk-booking rows for the same student and teacher assig
     bookings: [booking, { ...booking, id: "2", bookingFee: 20 }],
   });
   assert.equal(conflict?.kind, "duplicate-booking");
+});
+
+test("detects only subjects removed from their matching stage", () => {
+  const nextState = {
+    ...emptyCenterState,
+    subjectCatalog: {
+      ...emptyCenterState.subjectCatalog,
+      "المرحلة الإعدادية": ["اللغة العربية", "الرياضيات", "العلوم", "الدراسات الاجتماعية"],
+    },
+  };
+  assert.deepEqual(removedSubjectCatalogEntries(emptyCenterState, nextState), [
+    { stage: "المرحلة الإعدادية", subject: "اللغة الإنجليزية" },
+  ]);
+});
+
+test("allows deleting an unused subject while preserving other catalog entries", () => {
+  const nextState = {
+    ...emptyCenterState,
+    subjectCatalog: {
+      ...emptyCenterState.subjectCatalog,
+      "المرحلة الإعدادية": emptyCenterState.subjectCatalog["المرحلة الإعدادية"].filter((subject) => subject !== "العلوم"),
+    },
+  };
+  assert.equal(findSubjectCatalogDeletionConflict(emptyCenterState, nextState), null);
+  assert.equal((nextState.subjectCatalog["المرحلة الابتدائية"] as string[]).includes("العلوم"), true);
+});
+
+test("blocks deleting the final subject in a stage", () => {
+  const currentState = {
+    ...emptyCenterState,
+    subjectCatalog: { ...emptyCenterState.subjectCatalog, "المرحلة الإعدادية": ["العلوم"] },
+  };
+  const nextState = {
+    ...currentState,
+    subjectCatalog: { ...currentState.subjectCatalog, "المرحلة الإعدادية": [] },
+  };
+  assert.equal(findSubjectCatalogDeletionConflict(currentState, nextState)?.kind, "last-subject");
+});
+
+test("blocks deleting a subject assigned to a teacher", () => {
+  const conflict = findSubjectUsageConflict(
+    {
+      teachers: [{ id: "7", name: "أ/ أحمد", assignments: [{ stage: "المرحلة الإعدادية", grade: "الصف الأول", subject: "العلوم" }] }],
+      pricing: [],
+      bookings: [],
+      sessions: [],
+    },
+    "المرحلة الإعدادية",
+    "العلوم",
+  );
+  assert.equal(conflict?.kind, "teacher-assignment");
+});
+
+test("blocks deleting a subject with a price, active booking, or open session", () => {
+  const stage = "المرحلة الإعدادية";
+  const subject = "العلوم";
+  const base = { teachers: [], pricing: [], bookings: [], sessions: [] };
+  assert.equal(findSubjectUsageConflict({ ...base, pricing: [{ stage, subject }] }, stage, subject)?.kind, "price-rule");
+  assert.equal(findSubjectUsageConflict({ ...base, bookings: [{ stage, subject, active: true }] }, stage, subject)?.kind, "active-booking");
+  assert.equal(findSubjectUsageConflict({ ...base, sessions: [{ stage, subject, status: "scheduled" }] }, stage, subject)?.kind, "open-session");
+});
+
+test("keeps ended sessions and archived bookings as history without blocking catalog removal", () => {
+  const stage = "المرحلة الإعدادية";
+  const subject = "العلوم";
+  const conflict = findSubjectUsageConflict(
+    {
+      teachers: [],
+      pricing: [],
+      bookings: [{ stage, subject, active: false }],
+      sessions: [{ stage, subject, status: "ended" }],
+    },
+    stage,
+    subject,
+  );
+  assert.equal(conflict, null);
 });

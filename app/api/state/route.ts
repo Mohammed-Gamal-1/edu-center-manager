@@ -1,4 +1,4 @@
-import { emptyCenterState, findActiveStudentStateConflict, findCenterStateBusinessConflict, isCenterStatePayload, normalizeCenterStatePricing } from "../../../lib/center-state";
+import { emptyCenterState, findActiveStudentStateConflict, findCenterStateBusinessConflict, findSubjectCatalogDeletionConflict, isCenterStatePayload, normalizeCenterStatePricing } from "../../../lib/center-state";
 import { sessionFromRequest } from "../../../lib/server-auth";
 import { supabaseInsert, supabaseQuery, supabaseUpdate } from "../../../lib/supabase-rest";
 
@@ -54,6 +54,21 @@ export async function PUT(request: Request) {
     const currentVersion = current?.version ?? 0;
     const nextState = normalizeCenterStatePricing(body.state);
     const currentState = normalizedPersistedState(current?.data ?? emptyCenterState);
+    if (isCenterStatePayload(currentState)) {
+      const subjectDeletionConflict = findSubjectCatalogDeletionConflict(currentState, nextState);
+      if (subjectDeletionConflict) {
+        return Response.json(
+          {
+            ok: false,
+            error: subjectDeletionConflict.message,
+            conflict: true,
+            state: currentState,
+            version: currentVersion,
+          },
+          { status: 409 },
+        );
+      }
+    }
     const studentConflict = findActiveStudentStateConflict(nextState);
     if (studentConflict) {
       return Response.json(
