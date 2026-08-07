@@ -81,8 +81,8 @@ button:disabled { cursor: not-allowed; opacity: .65; }
 .page-heading h1 { margin: 0 0 6px; font-size: 22px; letter-spacing: -.02em; }.page-heading p { margin: 0; color: var(--muted); font-size: 12px; }
 .top-actions { display: flex; align-items: center; gap: 12px; }
 .sync-chip { min-height: 42px; padding: 0 12px; border: 1px solid #cae5de; border-radius: 12px; color: var(--teal); background: #f0faf7; display: flex; align-items: center; gap: 8px; }
-.sync-chip > span { display: grid; gap: 2px; font-size: 9px; font-weight: 800; white-space: nowrap; }.sync-chip small { color: #76918a; font-size: 7px; font-weight: 500; }
-.sync-chip.offline, .sync-chip.error { color: #a86b2d; border-color: #f0ddc6; background: #fff8ed; }.sync-chip.conflict { color: #b84646; border-color: #efd3d3; background: #fff5f5; }
+.sync-chip > span { display: grid; gap: 2px; font-size: 9px; font-weight: 800; white-space: nowrap; }.sync-chip small { color: #76918a; font-size: 7px; font-weight: 500; }.sync-chip > b { min-width: 20px; height: 20px; padding: 0 5px; border-radius: 10px; color: #fff; background: #a86b2d; display: grid; place-items: center; font-size: 8px; }.sync-chip.conflict > b { background: #b84646; }
+.sync-chip.local, .sync-chip.offline, .sync-chip.error { color: #a86b2d; border-color: #f0ddc6; background: #fff8ed; }.sync-chip.conflict { color: #b84646; border-color: #efd3d3; background: #fff5f5; }
 .today-chip { height: 42px; border: 1px solid var(--line); border-radius: 12px; padding: 0 14px; display: flex; align-items: center; gap: 9px; font-size: 11px; color: #52615c; background: #fff; }
 .icon-btn { width: 41px; height: 41px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 12px; background: #fff; color: #45534f; }
 .notification { position: relative; }.notification i { position: absolute; width: 7px; height: 7px; border-radius: 50%; background: #e47845; top: 8px; right: 8px; border: 2px solid #fff; }

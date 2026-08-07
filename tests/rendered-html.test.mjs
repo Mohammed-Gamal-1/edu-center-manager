@@ -36,10 +36,12 @@ test("server-renders the secure Arabic application shell", async () => {
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|Codex is working/i);
 });
 
-test("keeps cloud persistence, offline recovery, and admin auth protections in place", async () => {
-  const [centerApp, stateRoute, serverAuth, supabaseRest, migration, safetyMigration, authMigration, persistentRecoveryMigration, relationalSyncMigration, teacherPricingMigration] = await Promise.all([
+test("keeps local-first persistence, cloud recovery, and admin auth protections in place", async () => {
+  const [centerApp, stateRoute, localFirstStore, centerSync, serverAuth, supabaseRest, migration, safetyMigration, authMigration, persistentRecoveryMigration, relationalSyncMigration, teacherPricingMigration] = await Promise.all([
     readFile(new URL("../app/CenterApp.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/state/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/local-first-store.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/center-sync.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/server-auth.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/supabase-rest.ts", import.meta.url), "utf8"),
     readFile(new URL("../supabase/migrations/001_initial_schema.sql", import.meta.url), "utf8"),
@@ -58,8 +60,11 @@ test("keeps cloud persistence, offline recovery, and admin auth protections in p
   assert.match(centerApp, /setStartTime\(new Date\(\)\.toTimeString\(\)\.slice\(0, 5\)\)/);
   assert.match(centerApp, /type="time"[\s\S]{0,160}value=\{startTime\}[\s\S]{0,160}onInput=/);
   assert.match(centerApp, /type="date"[\s\S]{0,160}value=\{customDateFrom\}[\s\S]{0,160}onInput=/);
-  assert.match(centerApp, /استخدام النسخة السحابية/);
-  assert.match(centerApp, /حفظ نسخة هذا الجهاز/);
+  assert.match(centerApp, /savePendingLocalSnapshot/);
+  assert.match(centerApp, /loadLocalReplica/);
+  assert.match(centerApp, /تنزيل نسخة أمان/);
+  assert.match(centerApp, /اعتماد الدمج المحلي/);
+  assert.match(centerApp, /محفوظ محليًا وسحابيًا/);
   assert.match(centerApp, /aria-label=\{`حذف مادة \$\{subject\}`\}/);
   assert.match(centerApp, /تأكيد حذف المادة/);
   assert.match(centerApp, /findSubjectUsageConflict/);
@@ -67,6 +72,15 @@ test("keeps cloud persistence, offline recovery, and admin auth protections in p
   assert.match(stateRoute, /status:\s*409/);
   assert.match(stateRoute, /version:\s*`eq\.\$\{currentVersion\}`/);
   assert.match(stateRoute, /findSubjectCatalogDeletionConflict/);
+  assert.match(stateRoute, /reason:\s*"validation"/);
+  assert.match(stateRoute, /reason:\s*"version"/);
+  assert.match(localFirstStore, /eltafawoq-center-local-v1/);
+  assert.match(localFirstStore, /indexedDB\.open/);
+  assert.match(localFirstStore, /createObjectStore\("operations"/);
+  assert.match(localFirstStore, /createIndex\("status"/);
+  assert.match(localFirstStore, /MAX_LOCAL_OPERATIONS/);
+  assert.match(centerSync, /mergeCenterSnapshots/);
+  assert.match(centerSync, /same-record-changed/);
   assert.match(serverAuth, /verify_admin_credentials/);
   assert.match(serverAuth, /HttpOnly; Secure; SameSite=Strict/);
   assert.match(supabaseRest, /SUPABASE_SERVICE_ROLE_KEY/);

@@ -1,12 +1,14 @@
 "use client";
 
 import { Activity, Archive, BarChart3, Bell, BookOpen, CalendarDays, Check, ChevronLeft, CircleDollarSign, Cloud, CloudOff, Clock3, Edit3, FileClock, GraduationCap, History, LayoutDashboard, LockKeyhole, LoaderCircle, Menu, MoreHorizontal, PauseCircle, Plus, ReceiptText, Search, Settings, ShieldCheck, Sparkles, SquarePen, Trash2, TrendingUp, UserPlus, Users, WalletCards, X } from "lucide-react";
-import { FormEvent, ReactNode, useEffect, useRef, useState } from "react";
+import { FormEvent, ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { allocateDebtPayment, calculateAnalyticsProfit, DebtPaymentRecord, getSessionFinancials, normalizeAttendancePaymentTotal, normalizePaidAmount, outstandingForAttendance, outstandingForSession, outstandingForStudent, paidDuringSession, shortageForAttendance } from "../lib/center-finance";
 import { bookingFeeForSelection, findTeacherPriceRule, linkLegacyPriceRulesToTeachers } from "../lib/center-pricing";
 import { findActiveStudentConflict, hasMatchingBooking, isStudentInSessionGrade, nextStudentIdForStage } from "../lib/center-rules";
 import { downloadAnalyticsExcel, type AnalyticsExcelExport } from "../lib/analytics-excel";
 import { findSubjectUsageConflict } from "../lib/center-state";
+import { mergeCenterSnapshots, sameCenterSnapshotContent } from "../lib/center-sync";
+import { loadLocalReplica, markLocalOperationConflict, markLocalOperationSynced, saveCloudLocalSnapshot, savePendingLocalSnapshot, type LocalOperation, type LocalReplica } from "../lib/local-first-store";
 
 type View = "dashboard" | "students" | "teachers" | "sessions" | "expenses" | "admin";
 type StudentTab = "register" | "bookings" | "records" | "debts";
@@ -91,7 +93,7 @@ type AuditEntry = {
   tone: "green" | "blue" | "orange";
 };
 
-type SyncStatus = "loading" | "saving" | "saved" | "offline" | "error" | "conflict";
+type SyncStatus = "loading" | "local" | "saving" | "saved" | "offline" | "error" | "conflict";
 
 type CenterSnapshot = {
   students: Student[];
@@ -109,12 +111,16 @@ type CenterSnapshot = {
 
 type LocalSnapshot = { state: CenterSnapshot; baseVersion: number };
 
+type CloudConflict = LocalSnapshot & {
+  localState: CenterSnapshot;
+  mergedState: CenterSnapshot;
+  conflictPaths: string[];
+  operationId?: string;
+  message?: string;
+};
+
 const LOCAL_PENDING_KEY = "eltafawoq.pending-state.v3";
 const LOCAL_CACHE_KEY = "eltafawoq.cloud-cache.v3";
-
-const sameSnapshotContent = (left: CenterSnapshot, right: CenterSnapshot) => {
-  return JSON.stringify({ ...left, savedAt: "" }) === JSON.stringify({ ...right, savedAt: "" });
-};
 
 const stages: Stage[] = ["المرحلة الابتدائية", "المرحلة الإعدادية", "المرحلة الثانوية"];
 const gradesByStage: Record<Stage, string[]> = {
@@ -246,13 +252,38 @@ export default function CenterApp() {
   const [toast, setToast] = useState("");
   const [dataReady, setDataReady] = useState(false);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>("loading");
-  const [cloudConflict, setCloudConflict] = useState<LocalSnapshot | null>(null);
+  const [cloudConflict, setCloudConflict] = useState<CloudConflict | null>(null);
+  const [pendingOperations, setPendingOperations] = useState(0);
   const [retrySync, setRetrySync] = useState(0);
   const versionRef = useRef(0);
   const saveTimerRef = useRef<number | null>(null);
   const saveInFlightRef = useRef(false);
   const latestSnapshotRef = useRef<CenterSnapshot | null>(null);
+  const baseSnapshotRef = useRef<CenterSnapshot | null>(null);
+  const pendingOperationRef = useRef<Pick<LocalOperation<CenterSnapshot>, "id" | "sequence"> | null>(null);
+  const localPersistPromiseRef = useRef<Promise<{ operation: LocalOperation<CenterSnapshot>; pendingCount: number }> | null>(null);
   const skipNextPersistRef = useRef(false);
+  const forceNextPersistRef = useRef(false);
+
+  const applySnapshotState = useCallback((rawState: CenterSnapshot) => {
+    const state = {
+      ...rawState,
+      pricing: linkLegacyPriceRulesToTeachers(rawState.pricing, rawState.teachers),
+      debtPayments: rawState.debtPayments ?? [],
+    };
+    setStudents(state.students);
+    setTeachers(state.teachers);
+    setPricing(state.pricing);
+    setSessions(state.sessions);
+    setBookings(state.bookings);
+    setExpenses(state.expenses);
+    setDebtPayments(state.debtPayments);
+    setAudit(state.audit);
+    setSubjectCatalog(state.subjectCatalog);
+    setRooms(state.rooms);
+    latestSnapshotRef.current = state;
+    return state;
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -278,79 +309,217 @@ export default function CenterApp() {
   useEffect(() => {
     if (!authenticated || dataReady) return;
     let cancelled = false;
-    const applySnapshot = (state: CenterSnapshot) => {
-      setStudents(state.students);
-      setTeachers(state.teachers);
-      setPricing(linkLegacyPriceRulesToTeachers(state.pricing, state.teachers));
-      setSessions(state.sessions);
-      setBookings(state.bookings);
-      setExpenses(state.expenses);
-      setDebtPayments(state.debtPayments ?? []);
-      setAudit(state.audit);
-      setSubjectCatalog(state.subjectCatalog);
-      setRooms(state.rooms);
-    };
-    const readLocal = (key: string) => {
+    const readLegacyLocal = (key: string) => {
       try {
         return JSON.parse(localStorage.getItem(key) ?? "null") as LocalSnapshot | null;
       } catch {
         return null;
       }
     };
-    const pending = readLocal(LOCAL_PENDING_KEY);
-    const cached = readLocal(LOCAL_CACHE_KEY);
-    if (pending?.state) {
-      applySnapshot(pending.state);
-      versionRef.current = pending.baseVersion;
-      queueMicrotask(() => setSyncStatus(navigator.onLine ? "saving" : "offline"));
-    }
-    fetch("/api/state", { cache: "no-store" })
-      .then(async (response) => {
+    const boot = async () => {
+      const pendingLegacy = readLegacyLocal(LOCAL_PENDING_KEY);
+      const cachedLegacy = readLegacyLocal(LOCAL_CACHE_KEY);
+      let replica: LocalReplica<CenterSnapshot> | null = null;
+      try {
+        replica = await loadLocalReplica<CenterSnapshot>();
+      } catch {
+        /* The legacy LocalStorage copy remains an emergency fallback. */
+      }
+
+      if (!replica && pendingLegacy?.state) {
+        const baseState = cachedLegacy?.baseVersion === pendingLegacy.baseVersion ? cachedLegacy.state : null;
+        try {
+          const saved = await savePendingLocalSnapshot(pendingLegacy.state, pendingLegacy.baseVersion, baseState, "legacy");
+          replica = {
+            state: saved.operation.state,
+            baseVersion: saved.operation.baseVersion,
+            baseState: saved.operation.baseState,
+            status: saved.operation.status,
+            operationId: saved.operation.id,
+            sequence: saved.operation.sequence,
+            deviceId: saved.operation.deviceId,
+            updatedAt: saved.operation.updatedAt,
+            pendingCount: saved.pendingCount,
+          };
+        } catch {
+          replica = {
+            state: pendingLegacy.state,
+            baseVersion: pendingLegacy.baseVersion,
+            baseState,
+            status: "pending",
+            operationId: "legacy-local-storage",
+            sequence: 0,
+            deviceId: "legacy",
+            updatedAt: pendingLegacy.state.savedAt,
+            pendingCount: 1,
+          };
+        }
+      } else if (!replica && cachedLegacy?.state) {
+        try {
+          const saved = await saveCloudLocalSnapshot(cachedLegacy.state, cachedLegacy.baseVersion);
+          replica = {
+            state: saved.operation.state,
+            baseVersion: saved.operation.baseVersion,
+            baseState: saved.operation.baseState,
+            status: saved.operation.status,
+            operationId: saved.operation.id,
+            sequence: saved.operation.sequence,
+            deviceId: saved.operation.deviceId,
+            updatedAt: saved.operation.updatedAt,
+            pendingCount: saved.pendingCount,
+          };
+        } catch {
+          replica = {
+            state: cachedLegacy.state,
+            baseVersion: cachedLegacy.baseVersion,
+            baseState: cachedLegacy.state,
+            status: "synced",
+            operationId: "legacy-cloud-cache",
+            sequence: 0,
+            deviceId: "legacy",
+            updatedAt: cachedLegacy.state.savedAt,
+            pendingCount: 0,
+          };
+        }
+      }
+
+      if (cancelled) return;
+      if (replica) {
+        applySnapshotState(replica.state);
+        versionRef.current = replica.baseVersion;
+        baseSnapshotRef.current = replica.baseState ?? (replica.status === "synced" ? replica.state : null);
+        if (replica.status !== "synced" && !replica.operationId.startsWith("legacy-")) pendingOperationRef.current = { id: replica.operationId, sequence: replica.sequence };
+        setPendingOperations(replica.pendingCount);
+        setSyncStatus(replica.status === "synced" ? "saved" : replica.status === "conflict" ? "conflict" : navigator.onLine ? "local" : "offline");
+      }
+
+      try {
+        const response = await fetch("/api/state", { cache: "no-store" });
         if (response.status === 401) throw new Error("unauthorized");
         if (!response.ok) throw new Error("unavailable");
-        return response.json() as Promise<{
-          state: CenterSnapshot;
-          version: number;
-        }>;
-      })
-      .then((result) => {
+        const result = (await response.json()) as { state: CenterSnapshot; version: number };
         if (cancelled) return;
-        if (!pending?.state) {
-          skipNextPersistRef.current = true;
-          applySnapshot(result.state);
-          versionRef.current = result.version;
-          localStorage.setItem(
-            LOCAL_CACHE_KEY,
-            JSON.stringify({
-              state: result.state,
-              baseVersion: result.version,
-            } satisfies LocalSnapshot),
-          );
-          setSyncStatus("saved");
+        const cloudState: CenterSnapshot = {
+          ...result.state,
+          pricing: linkLegacyPriceRulesToTeachers(result.state.pricing, result.state.teachers),
+          debtPayments: result.state.debtPayments ?? [],
+        };
+
+        if (replica && replica.status !== "synced") {
+          if (sameCenterSnapshotContent(replica.state, cloudState)) {
+            versionRef.current = result.version;
+            baseSnapshotRef.current = cloudState;
+            localStorage.setItem(LOCAL_CACHE_KEY, JSON.stringify({ state: cloudState, baseVersion: result.version } satisfies LocalSnapshot));
+            localStorage.removeItem(LOCAL_PENDING_KEY);
+            if (!replica.operationId.startsWith("legacy-")) {
+              setPendingOperations(await markLocalOperationSynced(replica.operationId, cloudState, result.version));
+              if (pendingOperationRef.current?.id === replica.operationId) pendingOperationRef.current = null;
+            } else {
+              await saveCloudLocalSnapshot(cloudState, result.version).catch(() => undefined);
+              setPendingOperations(0);
+            }
+            skipNextPersistRef.current = true;
+            applySnapshotState(cloudState);
+            setSyncStatus("saved");
+            setDataReady(true);
+            return;
+          }
+
+          if (result.version !== replica.baseVersion || replica.status === "conflict") {
+            const mergeBase = replica.baseState ?? (cachedLegacy?.baseVersion === replica.baseVersion ? cachedLegacy.state : null);
+            if (mergeBase) {
+              const merged = mergeCenterSnapshots(mergeBase, replica.state, cloudState);
+              if (!merged.conflicts.length) {
+                versionRef.current = result.version;
+                baseSnapshotRef.current = cloudState;
+                localStorage.setItem(LOCAL_PENDING_KEY, JSON.stringify({ state: merged.state, baseVersion: result.version } satisfies LocalSnapshot));
+                forceNextPersistRef.current = true;
+                applySnapshotState(merged.state);
+                setSyncStatus(navigator.onLine ? "local" : "offline");
+                setDataReady(true);
+                return;
+              }
+              const conflictPaths = merged.conflicts.map((conflict) => conflict.path);
+              if (!replica.operationId.startsWith("legacy-")) {
+                setPendingOperations(await markLocalOperationConflict(replica.operationId, cloudState, result.version, conflictPaths));
+              }
+              skipNextPersistRef.current = true;
+              setCloudConflict({
+                state: cloudState,
+                baseVersion: result.version,
+                localState: replica.state,
+                mergedState: merged.state,
+                conflictPaths,
+                operationId: replica.operationId.startsWith("legacy-") ? undefined : replica.operationId,
+              });
+              setSyncStatus("conflict");
+              setDataReady(true);
+              return;
+            }
+
+            const conflictPaths = ["legacy-base-snapshot"];
+            if (!replica.operationId.startsWith("legacy-")) {
+              setPendingOperations(await markLocalOperationConflict(replica.operationId, cloudState, result.version, conflictPaths));
+            }
+            skipNextPersistRef.current = true;
+            setCloudConflict({ state: cloudState, baseVersion: result.version, localState: replica.state, mergedState: replica.state, conflictPaths, operationId: replica.operationId.startsWith("legacy-") ? undefined : replica.operationId });
+            setSyncStatus("conflict");
+            setDataReady(true);
+            return;
+          }
+
+          baseSnapshotRef.current = replica.baseState ?? cloudState;
+          setDataReady(true);
+          return;
         }
+
+        if (replica && (result.version < replica.baseVersion || (result.version === replica.baseVersion && !sameCenterSnapshotContent(replica.state, cloudState)))) {
+          const conflictPaths = ["cloud-version"];
+          skipNextPersistRef.current = true;
+          setCloudConflict({ state: cloudState, baseVersion: result.version, localState: replica.state, mergedState: replica.state, conflictPaths, operationId: replica.operationId.startsWith("legacy-") ? undefined : replica.operationId });
+          setSyncStatus("conflict");
+          setDataReady(true);
+          return;
+        }
+
+        versionRef.current = result.version;
+        baseSnapshotRef.current = cloudState;
+        localStorage.setItem(LOCAL_CACHE_KEY, JSON.stringify({ state: cloudState, baseVersion: result.version } satisfies LocalSnapshot));
+        localStorage.removeItem(LOCAL_PENDING_KEY);
+        if (!replica || result.version > replica.baseVersion || !sameCenterSnapshotContent(replica.state, cloudState)) {
+          const saved = await saveCloudLocalSnapshot(cloudState, result.version).catch(() => null);
+          if (saved) {
+            setPendingOperations(saved.pendingCount);
+          }
+        }
+        skipNextPersistRef.current = true;
+        applySnapshotState(cloudState);
+        setSyncStatus("saved");
         setDataReady(true);
-      })
-      .catch((error: Error) => {
+      } catch (error) {
         if (cancelled) return;
-        if (error.message === "unauthorized") {
+        if (error instanceof Error && error.message === "unauthorized") {
           setAuthenticated(false);
           setDataReady(false);
           setAuthChecking(true);
           setReceptionRetry((value) => value + 1);
           return;
         }
-        if (!pending?.state && cached?.state) {
+        if (!replica && cachedLegacy?.state) {
           skipNextPersistRef.current = true;
-          applySnapshot(cached.state);
-          versionRef.current = cached.baseVersion;
+          applySnapshotState(cachedLegacy.state);
+          versionRef.current = cachedLegacy.baseVersion;
+          baseSnapshotRef.current = cachedLegacy.state;
         }
         setSyncStatus("offline");
         setDataReady(true);
-      });
+      }
+    };
+    void boot();
     return () => {
       cancelled = true;
     };
-  }, [authenticated, dataReady]);
+  }, [applySnapshotState, authenticated, dataReady]);
 
   useEffect(() => {
     if (!authenticated || !dataReady) return;
@@ -358,7 +527,7 @@ export default function CenterApp() {
       skipNextPersistRef.current = false;
       return;
     }
-    const snapshot: CenterSnapshot = {
+    const nextSnapshot: CenterSnapshot = {
       students,
       teachers,
       pricing,
@@ -371,21 +540,53 @@ export default function CenterApp() {
       rooms,
       savedAt: new Date().toISOString(),
     };
+    const previousSnapshot = latestSnapshotRef.current;
+    const snapshotChanged = forceNextPersistRef.current || !previousSnapshot || !sameCenterSnapshotContent(previousSnapshot, nextSnapshot);
+    forceNextPersistRef.current = false;
+    const snapshot = snapshotChanged ? nextSnapshot : previousSnapshot;
     latestSnapshotRef.current = snapshot;
     const localRecord: LocalSnapshot = {
       state: snapshot,
       baseVersion: versionRef.current,
     };
-    localStorage.setItem(LOCAL_PENDING_KEY, JSON.stringify(localRecord));
+    const mergeBase = baseSnapshotRef.current;
+    const existingOperation = pendingOperationRef.current;
+    let localPersistence = localPersistPromiseRef.current;
+    if (snapshotChanged) {
+      localStorage.setItem(LOCAL_PENDING_KEY, JSON.stringify(localRecord));
+      localPersistence = savePendingLocalSnapshot(snapshot, localRecord.baseVersion, mergeBase);
+      localPersistPromiseRef.current = localPersistence;
+    } else if (!existingOperation && !localStorage.getItem(LOCAL_PENDING_KEY)) {
+      return;
+    }
+    let cancelled = false;
+    if (localPersistence) {
+      void localPersistence
+        .then((saved) => {
+          if (latestSnapshotRef.current?.savedAt === snapshot.savedAt) {
+            pendingOperationRef.current = { id: saved.operation.id, sequence: saved.operation.sequence };
+          }
+          if (!cancelled) {
+            setPendingOperations(saved.pendingCount);
+            setSyncStatus(navigator.onLine ? "saving" : "offline");
+          }
+        })
+        .catch(() => {
+          if (!cancelled) setSyncStatus(navigator.onLine ? "error" : "offline");
+        });
+    }
     if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
     if (!navigator.onLine) {
       queueMicrotask(() => setSyncStatus("offline"));
-      return;
+      return () => {
+        cancelled = true;
+      };
     }
-    queueMicrotask(() => setSyncStatus("saving"));
+    queueMicrotask(() => setSyncStatus("local"));
     if (saveInFlightRef.current) {
       saveTimerRef.current = window.setTimeout(() => setRetrySync((value) => value + 1), 180);
       return () => {
+        cancelled = true;
         if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
       };
     }
@@ -394,6 +595,8 @@ export default function CenterApp() {
         saveInFlightRef.current = true;
         let retryDelay: number | null = null;
         try {
+          const localSaved = localPersistence ? await localPersistence.catch(() => null) : null;
+          const operationId = localSaved?.operation.id ?? (!snapshotChanged ? existingOperation?.id : undefined);
           const response = await fetch("/api/state", {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
@@ -414,26 +617,63 @@ export default function CenterApp() {
             version?: number;
             conflict?: boolean;
             state?: CenterSnapshot;
+            reason?: "version" | "validation";
+            error?: string;
           };
           if (response.status === 409 || result.conflict) {
             if (result.state && typeof result.version === "number") {
-              if (sameSnapshotContent(snapshot, result.state)) {
+              const cloudState: CenterSnapshot = {
+                ...result.state,
+                pricing: linkLegacyPriceRulesToTeachers(result.state.pricing, result.state.teachers),
+                debtPayments: result.state.debtPayments ?? [],
+              };
+              if (sameCenterSnapshotContent(snapshot, cloudState)) {
                 versionRef.current = result.version;
-                localStorage.setItem(LOCAL_CACHE_KEY, JSON.stringify({ state: result.state, baseVersion: result.version } satisfies LocalSnapshot));
-                localStorage.removeItem(LOCAL_PENDING_KEY);
-                setSyncStatus("saved");
+                baseSnapshotRef.current = cloudState;
+                localStorage.setItem(LOCAL_CACHE_KEY, JSON.stringify({ state: cloudState, baseVersion: result.version } satisfies LocalSnapshot));
+                if (operationId) {
+                  setPendingOperations(await markLocalOperationSynced(operationId, cloudState, result.version));
+                  if (pendingOperationRef.current?.id === operationId) pendingOperationRef.current = null;
+                } else await saveCloudLocalSnapshot(cloudState, result.version).catch(() => undefined);
+                if (latestSnapshotRef.current?.savedAt === snapshot.savedAt) {
+                  localStorage.removeItem(LOCAL_PENDING_KEY);
+                  setCloudConflict(null);
+                  setSyncStatus("saved");
+                } else {
+                  setSyncStatus("local");
+                  retryDelay = 80;
+                }
                 return;
               }
-              setCloudConflict({
-                state: result.state,
-                baseVersion: result.version,
-              });
+
+              if (result.reason !== "validation" && mergeBase) {
+                const merged = mergeCenterSnapshots(mergeBase, snapshot, cloudState);
+                if (!merged.conflicts.length) {
+                  versionRef.current = result.version;
+                  baseSnapshotRef.current = cloudState;
+                  localStorage.setItem(LOCAL_PENDING_KEY, JSON.stringify({ state: merged.state, baseVersion: result.version } satisfies LocalSnapshot));
+                  forceNextPersistRef.current = true;
+                  applySnapshotState(merged.state);
+                  setCloudConflict(null);
+                  setSyncStatus("local");
+                  retryDelay = 80;
+                  return;
+                }
+                const conflictPaths = merged.conflicts.map((conflict) => conflict.path);
+                if (operationId) setPendingOperations(await markLocalOperationConflict(operationId, cloudState, result.version, conflictPaths));
+                setCloudConflict({ state: cloudState, baseVersion: result.version, localState: snapshot, mergedState: merged.state, conflictPaths, operationId, message: result.error });
+              } else {
+                const conflictPaths = [result.reason === "validation" ? "server-validation" : "missing-base-snapshot"];
+                if (operationId) setPendingOperations(await markLocalOperationConflict(operationId, cloudState, result.version, conflictPaths));
+                setCloudConflict({ state: cloudState, baseVersion: result.version, localState: snapshot, mergedState: snapshot, conflictPaths, operationId, message: result.error });
+              }
             }
             setSyncStatus("conflict");
             return;
           }
           if (!response.ok || !result.ok || typeof result.version !== "number") throw new Error("save failed");
           versionRef.current = result.version;
+          baseSnapshotRef.current = snapshot;
           localStorage.setItem(
             LOCAL_CACHE_KEY,
             JSON.stringify({
@@ -441,8 +681,13 @@ export default function CenterApp() {
               baseVersion: result.version,
             } satisfies LocalSnapshot),
           );
+          if (operationId) {
+            setPendingOperations(await markLocalOperationSynced(operationId, snapshot, result.version));
+            if (pendingOperationRef.current?.id === operationId) pendingOperationRef.current = null;
+          } else await saveCloudLocalSnapshot(snapshot, result.version).catch(() => undefined);
           if (latestSnapshotRef.current?.savedAt === snapshot.savedAt) {
             localStorage.removeItem(LOCAL_PENDING_KEY);
+            setCloudConflict(null);
             setSyncStatus("saved");
           } else {
             retryDelay = 80;
@@ -460,9 +705,10 @@ export default function CenterApp() {
       retrySync ? 80 : 650,
     );
     return () => {
+      cancelled = true;
       if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
     };
-  }, [authenticated, dataReady, students, teachers, pricing, sessions, bookings, expenses, debtPayments, audit, subjectCatalog, rooms, retrySync]);
+  }, [applySnapshotState, authenticated, dataReady, students, teachers, pricing, sessions, bookings, expenses, debtPayments, audit, subjectCatalog, rooms, retrySync]);
 
   useEffect(() => {
     const handleOnline = () => setRetrySync((value) => value + 1);
@@ -483,47 +729,59 @@ export default function CenterApp() {
 
   const keepLocalConflictCopy = () => {
     if (!cloudConflict) return;
+    const currentLocalState = latestSnapshotRef.current ?? cloudConflict.localState;
+    const localChangedAfterConflict = !sameCenterSnapshotContent(currentLocalState, cloudConflict.localState);
+    const canRefreshMerge = localChangedAfterConflict && baseSnapshotRef.current && !cloudConflict.conflictPaths.some((path) => ["cloud-version", "legacy-base-snapshot", "missing-base-snapshot"].includes(path));
+    const stateToPersist = canRefreshMerge ? mergeCenterSnapshots(baseSnapshotRef.current!, currentLocalState, cloudConflict.state).state : localChangedAfterConflict ? currentLocalState : cloudConflict.mergedState;
     versionRef.current = cloudConflict.baseVersion;
-    const latest = latestSnapshotRef.current;
-    if (latest) {
-      localStorage.setItem(
-        LOCAL_PENDING_KEY,
-        JSON.stringify({
-          state: latest,
-          baseVersion: cloudConflict.baseVersion,
-        } satisfies LocalSnapshot),
-      );
-    }
+    baseSnapshotRef.current = cloudConflict.state;
+    localStorage.setItem(LOCAL_PENDING_KEY, JSON.stringify({ state: stateToPersist, baseVersion: cloudConflict.baseVersion } satisfies LocalSnapshot));
+    forceNextPersistRef.current = true;
+    applySnapshotState(stateToPersist);
     setCloudConflict(null);
-    setSyncStatus("saving");
+    setSyncStatus("local");
     setRetrySync((value) => value + 1);
-    showToast("سيتم حفظ نسخة هذا الجهاز على السحابة");
+    showToast("تم دمج التغييرات وسيتم رفع نسخة الجهاز بأمان");
   };
 
-  const useCloudConflictCopy = () => {
+  const adoptCloudConflictCopy = async () => {
     if (!cloudConflict) return;
-    const normalizedCloudState = {
-      ...cloudConflict.state,
-      pricing: linkLegacyPriceRulesToTeachers(cloudConflict.state.pricing, cloudConflict.state.teachers),
-    };
+    const normalizedCloudState = cloudConflict.state;
     skipNextPersistRef.current = true;
-    setStudents(normalizedCloudState.students);
-    setTeachers(normalizedCloudState.teachers);
-    setPricing(normalizedCloudState.pricing);
-    setSessions(normalizedCloudState.sessions);
-    setBookings(normalizedCloudState.bookings);
-    setExpenses(normalizedCloudState.expenses);
-    setDebtPayments(normalizedCloudState.debtPayments ?? []);
-    setAudit(normalizedCloudState.audit);
-    setSubjectCatalog(normalizedCloudState.subjectCatalog);
-    setRooms(normalizedCloudState.rooms);
+    applySnapshotState(normalizedCloudState);
     versionRef.current = cloudConflict.baseVersion;
-    latestSnapshotRef.current = normalizedCloudState;
+    baseSnapshotRef.current = normalizedCloudState;
     localStorage.setItem(LOCAL_CACHE_KEY, JSON.stringify({ state: normalizedCloudState, baseVersion: cloudConflict.baseVersion } satisfies LocalSnapshot));
     localStorage.removeItem(LOCAL_PENDING_KEY);
+    const saved = await saveCloudLocalSnapshot(normalizedCloudState, cloudConflict.baseVersion).catch(() => null);
+    if (saved) setPendingOperations(await markLocalOperationSynced(saved.operation.id, normalizedCloudState, cloudConflict.baseVersion).catch(() => 0));
+    else if (cloudConflict.operationId) setPendingOperations(await markLocalOperationSynced(cloudConflict.operationId, normalizedCloudState, cloudConflict.baseVersion).catch(() => 0));
+    else setPendingOperations(0);
+    pendingOperationRef.current = null;
+    localPersistPromiseRef.current = null;
     setCloudConflict(null);
     setSyncStatus("saved");
     showToast("تم اعتماد أحدث نسخة محفوظة على السحابة");
+  };
+
+  const downloadConflictBackup = () => {
+    if (!cloudConflict) return;
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      conflictPaths: cloudConflict.conflictPaths,
+      localAtConflict: cloudConflict.localState,
+      currentLocal: latestSnapshotRef.current ?? cloudConflict.localState,
+      cloud: cloudConflict.state,
+      safeMergeDraft: cloudConflict.mergedState,
+      cloudVersion: cloudConflict.baseVersion,
+    };
+    const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `eltafawoq-conflict-backup-${Date.now()}.json`;
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    showToast("تم تنزيل نسخة أمان من بيانات الجهاز والسحابة");
   };
 
   const teacherName = (id: string) => teachers.find((teacher) => teacher.id === id)?.name ?? "مدرس مؤرشف";
@@ -679,14 +937,19 @@ export default function CenterApp() {
       icon: LoaderCircle,
     },
     saving: {
-      label: "جاري الحفظ",
-      hint: "يتم الحفظ في Supabase",
+      label: "محفوظ محليًا",
+      hint: `جاري رفع ${Math.max(pendingOperations, 1)} تعديل للسحابة`,
       icon: LoaderCircle,
     },
-    saved: { label: "محفوظ سحابيًا", hint: "كل التغييرات محفوظة", icon: Cloud },
+    local: {
+      label: "محفوظ على الجهاز",
+      hint: `${Math.max(pendingOperations, 1)} تعديل بانتظار المزامنة`,
+      icon: CloudOff,
+    },
+    saved: { label: "محفوظ محليًا وسحابيًا", hint: "لا توجد تعديلات معلقة", icon: Cloud },
     offline: {
-      label: "محفوظ مؤقتًا",
-      hint: "ستتم المزامنة عند رجوع الإنترنت",
+      label: "محفوظ على الجهاز",
+      hint: `${pendingOperations} تعديل سيُرفع عند رجوع الإنترنت`,
       icon: CloudOff,
     },
     error: {
@@ -795,6 +1058,7 @@ export default function CenterApp() {
                 {syncInfo[syncStatus].label}
                 <small>{syncInfo[syncStatus].hint}</small>
               </span>
+              {pendingOperations > 0 && syncStatus !== "saved" && <b>{pendingOperations}</b>}
             </div>
             <div className="today-chip">
               <CalendarDays size={17} />
@@ -1341,17 +1605,22 @@ export default function CenterApp() {
           <div>
             <CloudOff size={23} />
             <span>
-              <strong id="sync-conflict-title">يوجد تعديل محفوظ من جهاز آخر</strong>
-              <small>نسخة هذا الجهاز ما زالت محفوظة بأمان. اختر النسخة التي تريد اعتمادها.</small>
+              <strong id="sync-conflict-title">يوجد تعارض في {cloudConflict.conflictPaths.length} جزء من البيانات</strong>
+              <small>{cloudConflict.message ?? "تم دمج التعديلات المختلفة تلقائياً، والنسختان المحلية والسحابية محفوظتان حتى تختار."}</small>
             </span>
           </div>
           <div>
-            <button type="button" className="secondary-btn" onClick={useCloudConflictCopy}>
-              استخدام النسخة السحابية
+            <button type="button" className="secondary-btn" onClick={downloadConflictBackup}>
+              تنزيل نسخة أمان
             </button>
-            <button type="button" className="primary-btn" onClick={keepLocalConflictCopy}>
-              حفظ نسخة هذا الجهاز
+            <button type="button" className="secondary-btn" onClick={() => void adoptCloudConflictCopy()}>
+              اعتماد السحابة
             </button>
+            {!cloudConflict.conflictPaths.includes("server-validation") && (
+              <button type="button" className="primary-btn" onClick={keepLocalConflictCopy}>
+                اعتماد الدمج المحلي
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -5237,7 +5506,7 @@ function SettingsPanel({ subjectCatalog, setSubjectCatalog, teachers, pricing, s
         <ShieldCheck size={26} />
         <div>
           <h3>قاعدة البيانات السحابية</h3>
-          <p>كل تغيير يُحفظ أولاً على الجهاز كنسخة انتظار ثم يُزامن تلقائياً مع Supabase PostgreSQL.</p>
+          <p>كل تغيير يُحفظ فوراً في قاعدة IndexedDB على الجهاز مع سجل عمليات، ثم يُزامن تلقائياً مع Supabase PostgreSQL عند توفر الإنترنت.</p>
         </div>
         <span>حفظ مزدوج آمن</span>
         </section>
