@@ -68,6 +68,9 @@ test("keeps local-first persistence, cloud recovery, and admin auth protections 
   assert.match(centerApp, /aria-label=\{`حذف مادة \$\{subject\}`\}/);
   assert.match(centerApp, /تأكيد حذف المادة/);
   assert.match(centerApp, /findSubjectUsageConflict/);
+  assert.match(centerApp, /حذف الحجز المسبق نهائيًا/);
+  assert.match(centerApp, /حذف الحجز والبيانات المالية/);
+  assert.match(centerApp, /removeBookingById/);
   assert.match(stateRoute, /baseVersion/);
   assert.match(stateRoute, /status:\s*409/);
   assert.match(stateRoute, /version:\s*`eq\.\$\{currentVersion\}`/);
@@ -114,6 +117,7 @@ test("keeps local-first persistence, cloud recovery, and admin auth protections 
   assert.match(teacherPricingMigration, /one_active_price_per_teacher_grade_subject/i);
   assert.match(teacherPricingMigration, /jsonb_build_object\(\s*'teacherId'/i);
   assert.match(teacherPricingMigration, /on conflict \(teacher_id, grade_id, subject_id\)/i);
+  assert.match(teacherPricingMigration, /delete from public\.advance_bookings[\s\S]+snapshot -> 'bookings'/i);
   assert.match(teacherPricingMigration, /version\s*=\s*state_row\.version\s*\+\s*1/i);
   assert.ok(
     teacherPricingMigration.indexOf("create or replace function public.sync_center_state_to_relational") < teacherPricingMigration.lastIndexOf("update public.center_state as state_row"),

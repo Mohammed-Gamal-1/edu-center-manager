@@ -9,6 +9,7 @@ import {
   outstandingForSession,
   outstandingForStudent,
   paidDuringSession,
+  totalBookingRevenue,
 } from "../lib/center-finance.ts";
 
 const partialSession = {
@@ -105,4 +106,9 @@ test("a combined payment clears old lesson debts from oldest to newest", () => {
 
 test("debt allocation never applies more than the student owes", () => {
   assert.deepEqual(allocateDebtPayment([partialSession], [], "100", 100), [{ sessionId: "11", amount: 40 }]);
+});
+
+test("booking revenue is recalculated from the remaining booking records", () => {
+  assert.equal(totalBookingRevenue([{ bookingFee: 15 }, { bookingFee: 20 }]), 35);
+  assert.equal(totalBookingRevenue([{ bookingFee: 20 }]), 20);
 });

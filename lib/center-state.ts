@@ -32,6 +32,10 @@ export const emptyCenterState: CenterStatePayload = {
   savedAt: new Date(0).toISOString(),
 };
 
+export function removeBookingById<T extends { id: string }>(bookings: T[], bookingId: string) {
+  return bookings.filter((booking) => booking.id !== bookingId);
+}
+
 export function isCenterStatePayload(value: unknown): value is CenterStatePayload {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const payload = value as Record<string, unknown>;

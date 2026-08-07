@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { emptyCenterState, findActiveStudentStateConflict, findCenterStateBusinessConflict, findSubjectCatalogDeletionConflict, findSubjectUsageConflict, removedSubjectCatalogEntries, type CenterStatePayload } from "../lib/center-state.ts";
+import { emptyCenterState, findActiveStudentStateConflict, findCenterStateBusinessConflict, findSubjectCatalogDeletionConflict, findSubjectUsageConflict, removeBookingById, removedSubjectCatalogEntries, type CenterStatePayload } from "../lib/center-state.ts";
 
 const isStringArray = (value: unknown): value is string[] => Array.isArray(value) && value.every((item) => typeof item === "string");
 
@@ -118,6 +118,15 @@ test("rejects duplicate bulk-booking rows for the same student and teacher assig
     bookings: [booking, { ...booking, id: "2", bookingFee: 20 }],
   });
   assert.equal(conflict?.kind, "duplicate-booking");
+});
+
+test("permanently removes only the selected advance booking", () => {
+  const bookings = [
+    { id: "1", bookingFee: 15 },
+    { id: "2", bookingFee: 20 },
+  ];
+  assert.deepEqual(removeBookingById(bookings, "1"), [{ id: "2", bookingFee: 20 }]);
+  assert.deepEqual(removeBookingById(bookings, "missing"), bookings);
 });
 
 test("detects only subjects removed from their matching stage", () => {

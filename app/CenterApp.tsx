@@ -2,11 +2,11 @@
 
 import { Activity, Archive, BarChart3, Bell, BookOpen, CalendarDays, Check, ChevronLeft, CircleDollarSign, Cloud, CloudOff, Clock3, Edit3, FileClock, GraduationCap, History, LayoutDashboard, LockKeyhole, LoaderCircle, Menu, MoreHorizontal, PauseCircle, Plus, ReceiptText, Search, Settings, ShieldCheck, Sparkles, SquarePen, Trash2, TrendingUp, UserPlus, Users, WalletCards, X } from "lucide-react";
 import { FormEvent, ReactNode, useCallback, useEffect, useRef, useState } from "react";
-import { allocateDebtPayment, calculateAnalyticsProfit, DebtPaymentRecord, getSessionFinancials, normalizeAttendancePaymentTotal, normalizePaidAmount, outstandingForAttendance, outstandingForSession, outstandingForStudent, paidDuringSession, shortageForAttendance } from "../lib/center-finance";
+import { allocateDebtPayment, calculateAnalyticsProfit, DebtPaymentRecord, getSessionFinancials, normalizeAttendancePaymentTotal, normalizePaidAmount, outstandingForAttendance, outstandingForSession, outstandingForStudent, paidDuringSession, shortageForAttendance, totalBookingRevenue } from "../lib/center-finance";
 import { bookingFeeForSelection, findTeacherPriceRule, linkLegacyPriceRulesToTeachers } from "../lib/center-pricing";
 import { findActiveStudentConflict, hasMatchingBooking, isStudentInSessionGrade, nextStudentIdForStage } from "../lib/center-rules";
 import { downloadAnalyticsExcel, type AnalyticsExcelExport } from "../lib/analytics-excel";
-import { findSubjectUsageConflict } from "../lib/center-state";
+import { findSubjectUsageConflict, removeBookingById } from "../lib/center-state";
 import { mergeCenterSnapshots, sameCenterSnapshotContent } from "../lib/center-sync";
 import { loadLocalReplica, markLocalOperationConflict, markLocalOperationSynced, saveCloudLocalSnapshot, savePendingLocalSnapshot, type LocalOperation, type LocalReplica } from "../lib/local-first-store";
 
@@ -2294,6 +2294,8 @@ function StudentsPage({ tab, setTab, students, setStudents, teachers, bookings, 
 
 function BookingsPanel({ students, teachers, bookings, setBookings, audit, showToast }: { students: Student[]; teachers: Teacher[]; bookings: Booking[]; setBookings: React.Dispatch<React.SetStateAction<Booking[]>>; audit: React.Dispatch<React.SetStateAction<AuditEntry[]>>; showToast: (message: string) => void }) {
   const [open, setOpen] = useState(false);
+  const [bookingView, setBookingView] = useState<"active" | "archived">("active");
+  const [deletingBooking, setDeletingBooking] = useState<Booking | null>(null);
   const [query, setQuery] = useState("");
   const [studentQuery, setStudentQuery] = useState("");
   const [selectedStudentId, setSelectedStudentId] = useState("");
@@ -2301,8 +2303,8 @@ function BookingsPanel({ students, teachers, bookings, setBookings, audit, showT
   const [defaultBookingFee, setDefaultBookingFee] = useState("");
   const [manualBookingFees, setManualBookingFees] = useState<Record<string, string>>({});
   const normalized = query.trim().toLocaleLowerCase("ar");
-  const active = bookings
-    .filter((booking) => booking.active)
+  const visibleBookings = bookings
+    .filter((booking) => booking.active === (bookingView === "active"))
     .filter((booking) => {
       const student = students.find((item) => item.id === booking.studentId);
       const teacher = teachers.find((item) => item.id === booking.teacherId);
@@ -2349,8 +2351,19 @@ function BookingsPanel({ students, teachers, bookings, setBookings, audit, showT
           </button>
         </div>
       </div>
+      <div className="booking-status-bar">
+        <div className="segmented-tabs" aria-label="حالة الحجوزات المسبقة">
+          <button type="button" className={bookingView === "active" ? "active" : ""} onClick={() => setBookingView("active")}>
+            الحجوزات الحالية ({bookings.filter((booking) => booking.active).length})
+          </button>
+          <button type="button" className={bookingView === "archived" ? "active" : ""} onClick={() => setBookingView("archived")}>
+            الأرشيف ({bookings.filter((booking) => !booking.active).length})
+          </button>
+        </div>
+        <small>الحذف النهائي يزيل قيمة الحجز من جميع الحسابات والتقارير المالية.</small>
+      </div>
       <div className="booking-grid">
-        {active.map((booking) => {
+        {visibleBookings.map((booking) => {
           const student = students.find((item) => item.id === booking.studentId);
           const teacher = teachers.find((item) => item.id === booking.teacherId);
           return (
@@ -2363,25 +2376,40 @@ function BookingsPanel({ students, teachers, bookings, setBookings, audit, showT
                     {student?.id} · {booking.createdAt}
                   </small>
                 </div>
-                <button
-                  onClick={() => {
-                    setBookings((current) => current.map((item) => (item.id === booking.id ? { ...item, active: false } : item)));
-                    audit((current) => [
-                      {
-                        id: String(Date.now()),
-                        action: "أرشفة حجز مسبق",
-                        details: `تمت أرشفة حجز ${student?.name ?? booking.studentId} مع ${teacher?.name ?? booking.teacherId} — ${booking.subject}`,
-                        time: "الآن",
-                        tone: "orange",
-                      },
-                      ...current,
-                    ]);
-                    showToast("تم نقل الحجز للأرشيف");
-                  }}
-                  aria-label="أرشفة الحجز"
-                >
-                  <Archive size={17} />
-                </button>
+                <div className="booking-card-actions">
+                  {booking.active && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBookings((current) => current.map((item) => (item.id === booking.id ? { ...item, active: false } : item)));
+                        audit((current) => [
+                          {
+                            id: String(Date.now()),
+                            action: "أرشفة حجز مسبق",
+                            details: `تمت أرشفة حجز ${student?.name ?? booking.studentId} مع ${teacher?.name ?? booking.teacherId} — ${booking.subject}`,
+                            time: "الآن",
+                            tone: "orange",
+                          },
+                          ...current,
+                        ]);
+                        showToast("تم نقل الحجز للأرشيف مع الاحتفاظ بقيمته المالية");
+                      }}
+                      aria-label={`أرشفة حجز ${student?.name ?? booking.studentId} في ${booking.subject}`}
+                      title="أرشفة الحجز"
+                    >
+                      <Archive size={17} />
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="delete"
+                    onClick={() => setDeletingBooking(booking)}
+                    aria-label={`حذف حجز ${student?.name ?? booking.studentId} في ${booking.subject}`}
+                    title="حذف الحجز نهائيًا"
+                  >
+                    <Trash2 size={17} />
+                  </button>
+                </div>
               </div>
               <div className="booking-link">
                 <span>
@@ -2402,7 +2430,7 @@ function BookingsPanel({ students, teachers, bookings, setBookings, audit, showT
           );
         })}
       </div>
-      {!active.length && <EmptyState icon={<BookOpen />} title="لا توجد حجوزات مطابقة" text={query ? "غيّر كلمات البحث لعرض حجوزات أخرى" : "ابدأ بربط طالب مع المدرس المناسب"} />}
+      {!visibleBookings.length && <EmptyState icon={bookingView === "active" ? <BookOpen /> : <Archive />} title={bookingView === "active" ? "لا توجد حجوزات حالية مطابقة" : "لا توجد حجوزات مؤرشفة مطابقة"} text={query ? "غيّر كلمات البحث لعرض حجوزات أخرى" : bookingView === "active" ? "ابدأ بربط طالب مع المدرس المناسب" : "الحجوزات التي تتم أرشفتها ستظهر هنا"} />}
       {open && (
         <Modal title="حجز مسبق لعدة مواد" subtitle="اختر الطالب والمواد، ثم ضع سعر الحجز الواحد مع أي استثناءات" onClose={closeBooking} wide>
           <form
@@ -2578,6 +2606,49 @@ function BookingsPanel({ students, teachers, bookings, setBookings, audit, showT
               تأكيد {selectedOptions.length || ""} {selectedOptions.length === 1 ? "حجز" : "حجوزات"}
             </button>
           </form>
+        </Modal>
+      )}
+      {deletingBooking && (
+        <Modal title="حذف الحجز المسبق نهائيًا" subtitle="سيُحذف الحجز وقيمته من جميع الحسابات والتقارير المالية" onClose={() => setDeletingBooking(null)}>
+          <div className="modal-body">
+            <div className="delete-review">
+              <Trash2 size={22} />
+              <div>
+                <strong>{students.find((student) => student.id === deletingBooking.studentId)?.name ?? deletingBooking.studentId} — {deletingBooking.subject}</strong>
+                <span>
+                  {teachers.find((teacher) => teacher.id === deletingBooking.teacherId)?.name ?? "مدرس مؤرشف"} · {deletingBooking.grade} · {money(deletingBooking.bookingFee)}
+                </span>
+              </div>
+            </div>
+            <div className="form-error booking-delete-warning">لا يمكن التراجع عن الحذف بعد مزامنته مع قاعدة البيانات.</div>
+          </div>
+          <div className="modal-actions">
+            <button type="button" className="secondary-btn" onClick={() => setDeletingBooking(null)}>
+              إلغاء
+            </button>
+            <button
+              type="button"
+              className="danger-confirm"
+              onClick={() => {
+                const removedBookingId = deletingBooking.id;
+                setBookings((current) => removeBookingById(current, removedBookingId));
+                audit((current) => [
+                  {
+                    id: String(Date.now()),
+                    action: "حذف حجز مسبق نهائيًا",
+                    details: `تم حذف الحجز رقم ${removedBookingId} من السجل والحسابات المالية`,
+                    time: "الآن",
+                    tone: "orange",
+                  },
+                  ...current,
+                ]);
+                setDeletingBooking(null);
+                showToast("تم حذف الحجز نهائيًا وتحديث الحسابات المالية");
+              }}
+            >
+              حذف الحجز والبيانات المالية
+            </button>
+          </div>
         </Modal>
       )}
     </section>
@@ -4459,7 +4530,7 @@ function AnalyticsPanel({ sessions, bookings, expenses, debtPayments, teachers }
   const fullSessionValue = filtered.reduce((sum, lesson) => sum + getSessionFinancials(lesson).fullTotal, 0);
   const sessionShortages = filtered.reduce((sum, lesson) => sum + getSessionFinancials(lesson).shortages, 0);
   const sessionGross = filtered.reduce((sum, lesson) => sum + getSessionFinancials(lesson).collected, 0);
-  const bookingRevenue = filteredBookings.reduce((sum, booking) => sum + booking.bookingFee, 0);
+  const bookingRevenue = totalBookingRevenue(filteredBookings);
   const debtRecovery = filteredDebtPayments.reduce((sum, payment) => sum + payment.amount, 0);
   const debtRecoveryAlreadyReflected = filteredDebtPayments.filter((payment) => filteredSessionIds.has(payment.sessionId)).reduce((sum, payment) => sum + payment.amount, 0);
   const teacherDue = filtered.reduce((sum, lesson) => sum + lesson.studentIds.length * lesson.teacherFee, 0);

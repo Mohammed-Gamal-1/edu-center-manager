@@ -42,6 +42,14 @@ export type AnalyticsProfitInput = {
   sessionCount: number;
 };
 
+export type BookingFinancialRecord = {
+  bookingFee: number;
+};
+
+export function totalBookingRevenue(bookings: BookingFinancialRecord[]) {
+  return bookings.reduce((sum, booking) => sum + Math.max(0, Number.isFinite(booking.bookingFee) ? booking.bookingFee : 0), 0);
+}
+
 export function calculateAnalyticsProfit(input: AnalyticsProfitInput) {
   const sessionNet = input.fullSessionValue - input.teacherDue - input.sessionShortages;
   const additiveDebtRecovery = Math.max(0, input.debtRecovery - (input.debtRecoveryAlreadyReflected ?? 0));
