@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { emptyCenterState, findActiveStudentStateConflict, findCenterStateBusinessConflict, findSubjectCatalogDeletionConflict, findSubjectUsageConflict, removedSubjectCatalogEntries } from "../lib/center-state.ts";
+import { emptyCenterState, findActiveStudentStateConflict, findCenterStateBusinessConflict, findSubjectCatalogDeletionConflict, findSubjectUsageConflict, removedSubjectCatalogEntries, type CenterStatePayload } from "../lib/center-state.ts";
+
+const isStringArray = (value: unknown): value is string[] => Array.isArray(value) && value.every((item) => typeof item === "string");
 
 const session = (id: string, status: string, studentIds: string[]) => ({
   id,
@@ -132,11 +134,13 @@ test("detects only subjects removed from their matching stage", () => {
 });
 
 test("allows deleting an unused subject while preserving other catalog entries", () => {
-  const nextState = {
+  const preparatorySubjects = emptyCenterState.subjectCatalog["المرحلة الإعدادية"];
+  if (!isStringArray(preparatorySubjects)) assert.fail("Expected the preparatory subject catalog to contain strings");
+  const nextState: CenterStatePayload = {
     ...emptyCenterState,
     subjectCatalog: {
       ...emptyCenterState.subjectCatalog,
-      "المرحلة الإعدادية": emptyCenterState.subjectCatalog["المرحلة الإعدادية"].filter((subject) => subject !== "العلوم"),
+      "المرحلة الإعدادية": preparatorySubjects.filter((subject) => subject !== "العلوم"),
     },
   };
   assert.equal(findSubjectCatalogDeletionConflict(emptyCenterState, nextState), null);
