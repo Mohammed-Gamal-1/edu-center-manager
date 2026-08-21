@@ -12,6 +12,7 @@
 - `npm run local:import -- file.json --inspect`: فحص ملف استرجاع دون تعديل البيانات.
 - `npm run local:import-supabase`: قراءة Supabase ونسخها إلى SQLite لمرة واحدة.
 - `npm run local:verify-supabase`: مقارنة حالة SQLite بحالة Supabase بدون تعديل أي منهما.
+- `npm run local:backup`: إنشاء ملف SQLite متسق صالح للنقل أو الأرشفة.
 - `npm test`: بناء المشروع واختبار SQLite والسيرفر المحلي والتعارض والنسخ الاحتياطي.
 
 ## معلومات القالب الأصلي
