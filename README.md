@@ -1,3 +1,21 @@
+# سنتر التفوق — Local Server + SQLite
+
+التشغيل الأساسي لهذا المشروع أصبح محليًا بدون إنترنت: كمبيوتر السنتر يشغّل السيرفر ويحفظ البيانات في SQLite، وباقي الأجهزة تتصل به عبر شبكة الـWi-Fi المحلية.
+
+راجع [دليل الإعداد والتشغيل المحلي](./LOCAL-SERVER.md) قبل نقل البيانات أو تشغيل النظام في السنتر.
+
+## أوامر المشروع
+
+- `npm run build`: بناء نسخة التشغيل.
+- `npm run local:setup -- --username admin`: إعداد حساب الإدارة (مرّر PIN في متغير `LOCAL_ADMIN_PIN`).
+- `npm run local:start`: تشغيل السيرفر المحلي.
+- `npm run local:import -- file.json --inspect`: فحص ملف استرجاع دون تعديل البيانات.
+- `npm run local:import-supabase`: قراءة Supabase ونسخها إلى SQLite لمرة واحدة.
+- `npm run local:verify-supabase`: مقارنة حالة SQLite بحالة Supabase بدون تعديل أي منهما.
+- `npm test`: بناء المشروع واختبار SQLite والسيرفر المحلي والتعارض والنسخ الاحتياطي.
+
+## معلومات القالب الأصلي
+
 # vinext-starter
 
 A clean full-stack starter running on
