@@ -5,8 +5,7 @@ if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
   throw "Node.js 22.13 or newer is required."
 }
 
-$username = Read-Host "Local admin username (default: admin)"
-if ([string]::IsNullOrWhiteSpace($username)) { $username = "admin" }
+$username = Read-Host "Local admin username (leave blank to use the migrated username)"
 $securePin = Read-Host "Local admin PIN (4 digits)" -AsSecureString
 $pinPointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($securePin)
 
@@ -20,7 +19,11 @@ try {
   }
   npm run build
   if ($LASTEXITCODE -ne 0) { throw "Application build failed." }
-  npm run local:setup -- --username $username
+  if ([string]::IsNullOrWhiteSpace($username)) {
+    npm run local:setup
+  } else {
+    npm run local:setup -- --username $username
+  }
   if ($LASTEXITCODE -ne 0) { throw "Local admin setup failed." }
 
   Write-Host ""

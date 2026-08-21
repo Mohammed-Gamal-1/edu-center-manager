@@ -37,7 +37,7 @@ test("server-renders the secure Arabic application shell", async () => {
 });
 
 test("connects the offline shell to the local SQLite server without enabling cloud writes", async () => {
-  const [centerApp, stateRoute, localFirstStore, serviceWorker, registration, localServer, localDatabase, jsonImporter, supabaseImporter] = await Promise.all([
+  const [centerApp, stateRoute, localFirstStore, serviceWorker, registration, localServer, localDatabase, jsonImporter, supabaseImporter, setupScript] = await Promise.all([
     readFile(new URL("../app/CenterApp.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/state/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/local-first-store.ts", import.meta.url), "utf8"),
@@ -47,6 +47,7 @@ test("connects the offline shell to the local SQLite server without enabling clo
     readFile(new URL("../local-server/database.mjs", import.meta.url), "utf8"),
     readFile(new URL("../local-server/import-json.mjs", import.meta.url), "utf8"),
     readFile(new URL("../local-server/import-supabase.mjs", import.meta.url), "utf8"),
+    readFile(new URL("../setup-local-center.ps1", import.meta.url), "utf8"),
   ]);
 
   assert.match(centerApp, /savePendingLocalSnapshot/);
@@ -76,6 +77,8 @@ test("connects the offline shell to the local SQLite server without enabling clo
   assert.match(jsonImporter, /--inspect/);
   assert.match(jsonImporter, /before-json-import/);
   assert.doesNotMatch(supabaseImporter, /method:\s*"POST"|method:\s*"PUT"/i);
+  assert.match(setupScript, /migrated username/);
+  assert.match(setupScript, /IsNullOrWhiteSpace\(\$username\)/);
 
   assert.match(centerApp, /حذف مادة/);
   assert.match(centerApp, /تأكيد حذف المادة/);
