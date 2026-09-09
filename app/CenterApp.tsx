@@ -1,6 +1,6 @@
 "use client";
 
-import { Activity, Archive, BarChart3, Bell, BookOpen, CalendarDays, Check, ChevronLeft, CircleDollarSign, Cloud, CloudOff, Clock3, Database, Download, Edit3, FileClock, GraduationCap, History, LayoutDashboard, LockKeyhole, LoaderCircle, Menu, MoreHorizontal, PauseCircle, Plus, ReceiptText, Search, Settings, ShieldCheck, Sparkles, SquarePen, Trash2, TrendingUp, UserPlus, Users, WalletCards, X } from "lucide-react";
+import { Activity, Archive, BarChart3, Bell, BookOpen, CalendarDays, Check, ChevronLeft, CircleDollarSign, Cloud, CloudOff, Clock3, Database, Download, Edit3, FileClock, GraduationCap, History, LayoutDashboard, LockKeyhole, LoaderCircle, Menu, MessageCircle, MoreHorizontal, PauseCircle, Plus, ReceiptText, Search, Settings, ShieldCheck, Sparkles, SquarePen, Trash2, TrendingUp, UserPlus, Users, WalletCards, X } from "lucide-react";
 import { FormEvent, ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { allocateDebtPayment, calculateAnalyticsProfit, DebtPaymentRecord, getSessionFinancials, normalizeAttendancePaymentTotal, normalizePaidAmount, outstandingForAttendance, outstandingForSession, outstandingForStudent, paidDuringSession, shortageForAttendance, totalBookingRevenue } from "../lib/center-finance";
 import { bookingFeeForSelection, findTeacherPriceRule, linkLegacyPriceRulesToTeachers } from "../lib/center-pricing";
@@ -9,6 +9,7 @@ import { downloadAnalyticsExcel, type AnalyticsExcelExport } from "../lib/analyt
 import { findSubjectUsageConflict, removeBookingById } from "../lib/center-state";
 import { mergeCenterSnapshots, sameCenterSnapshotContent } from "../lib/center-sync";
 import { loadLocalReplica, markLocalOperationConflict, markLocalOperationSynced, saveCloudLocalSnapshot, savePendingLocalSnapshot, type LocalOperation, type LocalReplica } from "../lib/local-first-store";
+import { buildStudentChannelMessage, buildTeacherSessionMessage, resolveWhatsAppShare } from "../lib/whatsapp";
 
 type View = "dashboard" | "students" | "teachers" | "sessions" | "expenses" | "admin";
 type StudentTab = "register" | "bookings" | "records" | "debts";
@@ -119,6 +120,13 @@ type CloudConflict = LocalSnapshot & {
   message?: string;
 };
 
+type TeacherSessionShare = {
+  teacherId: string;
+  teacherName: string;
+  phone: string;
+  message: string;
+};
+
 const LOCAL_PENDING_KEY = "eltafawoq.pending-state.v3";
 const LOCAL_CACHE_KEY = "eltafawoq.cloud-cache.v3";
 
@@ -188,6 +196,67 @@ function Modal({ title, subtitle, children, onClose, wide = false }: { title: st
   );
 }
 
+function WhatsAppShareModal({ title, recipientName, initialPhone, message, onSavePhone, onClose }: { title: string; recipientName: string; initialPhone: string; message: string; onSavePhone: (phone: string) => void; onClose: () => void }) {
+  const [phone, setPhone] = useState(initialPhone);
+  const share = resolveWhatsAppShare(phone, message);
+
+  return (
+    <Modal title={title} subtitle="الرسالة مجهزة بالكامل، والمتبقي الضغط على إرسال داخل واتساب" onClose={onClose}>
+      <div className="modal-body whatsapp-share-body">
+        <div className="whatsapp-success-banner">
+          <MessageCircle size={25} />
+          <div>
+            <strong>الرسالة جاهزة لـ {recipientName}</strong>
+            <span>سيتم فتح WhatsApp Web في نافذة جديدة</span>
+          </div>
+        </div>
+        {share.status === "needs-correction" && (
+          <label className="field phone-correction-field">
+            رقم الهاتف الصحيح
+            <input
+              aria-label={`رقم هاتف ${recipientName}`}
+              value={phone}
+              onChange={(event) => setPhone(event.target.value)}
+              inputMode="numeric"
+              maxLength={11}
+              pattern="01[0125][0-9]{8}"
+              placeholder="01xxxxxxxxx"
+              autoFocus
+            />
+            <small className="form-error">الرقم لازم يكون 11 رقم موبايل مصري ومن غير مسافات.</small>
+          </label>
+        )}
+        {share.status === "skipped" && (
+          <div className="whatsapp-skip-note">
+            <ShieldCheck size={20} />
+            <span>لا يوجد رقم هاتف مسجل، لذلك تم تخطي رسالة واتساب.</span>
+          </div>
+        )}
+        {share.status === "ready" && (
+          <div className="whatsapp-message-preview">
+            <span>معاينة الرسالة</span>
+            <pre>{message}</pre>
+          </div>
+        )}
+      </div>
+      <div className="modal-actions">
+        <button type="button" className="secondary-btn" onClick={onClose}>إغلاق</button>
+        {share.status === "ready" && (
+          <a
+            className="primary-btn whatsapp-open-btn"
+            href={share.url}
+            target="_blank"
+            rel="noreferrer"
+            onClick={() => onSavePhone(share.localPhone)}
+          >
+            <MessageCircle size={18} /> فتح الرسالة على واتساب
+          </a>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
 function EmptyState({ icon, title, text }: { icon: ReactNode; title: string; text: string }) {
   return (
     <div className="empty-state">
@@ -247,6 +316,7 @@ export default function CenterApp() {
   const [createSessionOpen, setCreateSessionOpen] = useState(false);
   const [editSessionOpen, setEditSessionOpen] = useState(false);
   const [endReview, setEndReview] = useState(false);
+  const [endedSessionShare, setEndedSessionShare] = useState<TeacherSessionShare | null>(null);
   const [startReview, setStartReview] = useState(false);
   const [startTime, setStartTime] = useState(new Date().toTimeString().slice(0, 5));
   const [toast, setToast] = useState("");
@@ -1531,6 +1601,7 @@ export default function CenterApp() {
                   className="danger-confirm"
                   onClick={() => {
                     const end = new Date().toTimeString().slice(0, 5);
+                    const teacher = teachers.find((item) => item.id === lesson.teacherId);
                     setSessions((current) => current.map((item) => (item.id === lesson.id ? { ...item, status: "ended", endedAt: end } : item)));
                     setAudit((current) => [
                       {
@@ -1542,6 +1613,18 @@ export default function CenterApp() {
                       },
                       ...current,
                     ]);
+                    setEndedSessionShare({
+                      teacherId: lesson.teacherId,
+                      teacherName: teacher?.name ?? "المدرس",
+                      phone: teacher?.phone ?? "",
+                      message: buildTeacherSessionMessage({
+                        teacherName: teacher?.name ?? "المدرس",
+                        subject: lesson.subject,
+                        grade: gradeLabel(lesson.stage, lesson.grade),
+                        attendanceCount: lesson.studentIds.length,
+                        teacherDue: financials.teacherDue,
+                      }),
+                    });
                     setEndReview(false);
                     setSelectedSession(null);
                     showToast("تم إنهاء الحصة ونقلها للأرشيف");
@@ -1553,6 +1636,20 @@ export default function CenterApp() {
             </Modal>
           );
         })()}
+
+      {endedSessionShare && (
+        <WhatsAppShareModal
+          title="تم إنهاء الحصة بنجاح"
+          recipientName={endedSessionShare.teacherName}
+          initialPhone={endedSessionShare.phone}
+          message={endedSessionShare.message}
+          onSavePhone={(phone) => {
+            setTeachers((current) => current.map((teacher) => (teacher.id === endedSessionShare.teacherId ? { ...teacher, phone } : teacher)));
+            setEndedSessionShare((current) => (current ? { ...current, phone } : current));
+          }}
+          onClose={() => setEndedSessionShare(null)}
+        />
+      )}
 
       {adminPinOpen && (
         <Modal
@@ -1870,6 +1967,7 @@ function Dashboard({ sessions, teachers, onOpenSession, onViewAllSessions }: { s
 function StudentsPage({ tab, setTab, students, setStudents, teachers, bookings, setBookings, sessions, debtPayments, setDebtPayments, onOpenStudent, audit, showToast }: { tab: StudentTab; setTab: (tab: StudentTab) => void; students: Student[]; setStudents: React.Dispatch<React.SetStateAction<Student[]>>; teachers: Teacher[]; bookings: Booking[]; setBookings: React.Dispatch<React.SetStateAction<Booking[]>>; sessions: LessonSession[]; debtPayments: DebtPayment[]; setDebtPayments: React.Dispatch<React.SetStateAction<DebtPayment[]>>; onOpenStudent: (student: Student) => void; audit: React.Dispatch<React.SetStateAction<AuditEntry[]>>; showToast: (message: string) => void }) {
   const [query, setQuery] = useState("");
   const [editStudent, setEditStudent] = useState<Student | null>(null);
+  const [registeredStudent, setRegisteredStudent] = useState<Student | null>(null);
   const [settlingDebt, setSettlingDebt] = useState<{
     studentId: string;
     sessionId: string;
@@ -1919,6 +2017,7 @@ function StudentsPage({ tab, setTab, students, setStudents, teachers, bookings, 
       ...current,
     ]);
     event.currentTarget.reset();
+    setRegisteredStudent(newStudent);
     showToast(`تم تسجيل الطالب بالرقم ${newStudent.id}`);
   };
   return (
@@ -2315,6 +2414,19 @@ function StudentsPage({ tab, setTab, students, setStudents, teachers, bookings, 
             </button>
           </form>
         </Modal>
+      )}
+      {registeredStudent && (
+        <WhatsAppShareModal
+          title="تم تسجيل الطالب بنجاح"
+          recipientName={registeredStudent.name}
+          initialPhone={registeredStudent.phone}
+          message={buildStudentChannelMessage()}
+          onSavePhone={(phone) => {
+            setStudents((current) => current.map((student) => (student.id === registeredStudent.id ? { ...student, phone } : student)));
+            setRegisteredStudent((current) => (current ? { ...current, phone } : current));
+          }}
+          onClose={() => setRegisteredStudent(null)}
+        />
       )}
     </div>
   );
