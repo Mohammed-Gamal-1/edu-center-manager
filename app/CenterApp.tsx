@@ -1,12 +1,12 @@
 "use client";
 
-import { Activity, Archive, BarChart3, Bell, BookOpen, CalendarDays, Check, ChevronLeft, CircleDollarSign, Cloud, CloudOff, Clock3, Database, Download, Edit3, FileClock, GraduationCap, History, LayoutDashboard, LockKeyhole, LoaderCircle, Menu, MessageCircle, MoreHorizontal, PauseCircle, Plus, ReceiptText, Search, Settings, ShieldCheck, Sparkles, SquarePen, Trash2, TrendingUp, UserPlus, Users, WalletCards, X } from "lucide-react";
+import { Activity, Archive, BarChart3, Bell, BookOpen, CalendarDays, Check, ChevronLeft, CircleDollarSign, Cloud, CloudOff, Clock3, Edit3, FileClock, GraduationCap, History, LayoutDashboard, LockKeyhole, LoaderCircle, Menu, MessageCircle, MoreHorizontal, PauseCircle, Plus, ReceiptText, Search, Settings, ShieldCheck, Sparkles, SquarePen, Trash2, TrendingUp, UserPlus, Users, WalletCards, X } from "lucide-react";
 import { FormEvent, ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { allocateDebtPayment, calculateAnalyticsProfit, DebtPaymentRecord, getSessionFinancials, normalizeAttendancePaymentTotal, normalizePaidAmount, outstandingForAttendance, outstandingForSession, outstandingForStudent, paidDuringSession, shortageForAttendance, totalBookingRevenue } from "../lib/center-finance";
 import { bookingFeeForSelection, findTeacherPriceRule, linkLegacyPriceRulesToTeachers } from "../lib/center-pricing";
 import { findActiveStudentConflict, hasMatchingBooking, isStudentInSessionGrade, nextStudentIdForStage } from "../lib/center-rules";
 import { downloadAnalyticsExcel, type AnalyticsExcelExport } from "../lib/analytics-excel";
-import { findSubjectUsageConflict, removeBookingById } from "../lib/center-state";
+import { deleteStudentCompletely, findSubjectUsageConflict, removeBookingById } from "../lib/center-state";
 import { mergeCenterSnapshots, sameCenterSnapshotContent } from "../lib/center-sync";
 import { loadLocalReplica, markLocalOperationConflict, markLocalOperationSynced, saveCloudLocalSnapshot, savePendingLocalSnapshot, type LocalOperation, type LocalReplica } from "../lib/local-first-store";
 import { buildStudentChannelMessage, buildTeacherSessionMessage, resolveWhatsAppShare } from "../lib/whatsapp";
@@ -797,33 +797,6 @@ export default function CenterApp() {
     window.setTimeout(() => setToast(""), 2600);
   };
 
-  const downloadServerBackup = async () => {
-    try {
-      const response = await fetch("/api/local/export", { cache: "no-store" });
-      if (!response.ok) throw new Error("تعذر تصدير نسخة SQLite");
-      const url = URL.createObjectURL(await response.blob());
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `eltafawoq-sqlite-export-${todayIso()}.json`;
-      link.click();
-      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-      showToast("تم تنزيل نسخة من بيانات SQLite");
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : "تعذر تصدير النسخة");
-    }
-  };
-
-  const createServerBackup = async () => {
-    try {
-      const response = await fetch("/api/local/backup", { method: "POST" });
-      const result = (await response.json()) as { ok?: boolean; filename?: string; error?: string };
-      if (!response.ok || !result.ok) throw new Error(result.error || "تعذر إنشاء نسخة SQLite");
-      showToast(`تم إنشاء النسخة ${result.filename ?? "بنجاح"}`);
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : "تعذر إنشاء النسخة");
-    }
-  };
-
   const keepLocalConflictCopy = () => {
     if (!cloudConflict) return;
     const currentLocalState = latestSnapshotRef.current ?? cloudConflict.localState;
@@ -838,7 +811,7 @@ export default function CenterApp() {
     setCloudConflict(null);
     setSyncStatus("local");
     setRetrySync((value) => value + 1);
-    showToast("تم دمج التغييرات وسيتم حفظ نسخة الجهاز في SQLite بأمان");
+    showToast("تم دمج التغييرات وسيتم رفع نسخة الجهاز بأمان");
   };
 
   const adoptCloudConflictCopy = async () => {
@@ -858,7 +831,7 @@ export default function CenterApp() {
     localPersistPromiseRef.current = null;
     setCloudConflict(null);
     setSyncStatus("saved");
-    showToast("تم اعتماد أحدث نسخة محفوظة في SQLite");
+    showToast("تم اعتماد أحدث نسخة محفوظة على السحابة");
   };
 
   const downloadConflictBackup = () => {
@@ -878,7 +851,7 @@ export default function CenterApp() {
     link.download = `eltafawoq-conflict-backup-${Date.now()}.json`;
     link.click();
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-    showToast("تم تنزيل نسخة أمان من بيانات الجهاز وSQLite");
+    showToast("تم تنزيل نسخة أمان من بيانات الجهاز والسحابة");
   };
 
   const teacherName = (id: string) => teachers.find((teacher) => teacher.id === id)?.name ?? "مدرس مؤرشف";
@@ -995,7 +968,7 @@ export default function CenterApp() {
         <div className="loading-card">
           <LoaderCircle className="spin" size={31} />
           <strong>جاري فتح نظام سنتر التفوق</strong>
-          <span>يتم تجهيز قاعدة بيانات هذا الجهاز…</span>
+          <span>يتم التحقق من الجلسة الآمنة…</span>
         </div>
       </main>
     );
@@ -1006,8 +979,8 @@ export default function CenterApp() {
       <main className="login-page app-loading" dir="rtl">
         <div className="loading-card">
           <LoaderCircle className="spin" size={31} />
-          <strong>جاري فتح قاعدة البيانات المحلية</strong>
-          <span>يتم تحميل آخر نسخة محفوظة على هذا الجهاز…</span>
+          <strong>جاري استرجاع بيانات السنتر</strong>
+          <span>يتم تحميل آخر نسخة محفوظة بأمان…</span>
         </div>
       </main>
     );
@@ -1035,27 +1008,27 @@ export default function CenterApp() {
     },
     saving: {
       label: "محفوظ محليًا",
-      hint: `جاري حفظ ${Math.max(pendingOperations, 1)} تعديل في SQLite`,
+      hint: `جاري رفع ${Math.max(pendingOperations, 1)} تعديل للسحابة`,
       icon: LoaderCircle,
     },
     local: {
       label: "محفوظ على الجهاز",
-      hint: `${Math.max(pendingOperations, 1)} تعديل بانتظار السيرفر المحلي`,
+      hint: `${Math.max(pendingOperations, 1)} تعديل بانتظار المزامنة`,
       icon: CloudOff,
     },
-    saved: { label: "محفوظ في SQLite", hint: "لا توجد تعديلات معلقة", icon: Cloud },
+    saved: { label: "محفوظ محليًا وسحابيًا", hint: "لا توجد تعديلات معلقة", icon: Cloud },
     offline: {
       label: "محفوظ على الجهاز",
-      hint: `${pendingOperations} تعديل سيُحفظ عند رجوع السيرفر المحلي`,
+      hint: `${pendingOperations} تعديل سيُرفع عند رجوع الإنترنت`,
       icon: CloudOff,
     },
     error: {
-      label: "بانتظار السيرفر المحلي",
-      hint: "نسخة الجهاز آمنة وسيعاد الحفظ في SQLite",
+      label: "بانتظار المزامنة",
+      hint: "النسخة المحلية آمنة وسيعاد الحفظ",
       icon: CloudOff,
     },
     conflict: {
-      label: "تعارض بين جهازين يحتاج مراجعة",
+      label: "تعارض يحتاج مراجعة",
       hint: "النسخة المحلية لم تُحذف",
       icon: CloudOff,
     },
@@ -1155,6 +1128,7 @@ export default function CenterApp() {
                 {syncInfo[syncStatus].label}
                 <small>{syncInfo[syncStatus].hint}</small>
               </span>
+              {pendingOperations > 0 && syncStatus !== "saved" && <b>{pendingOperations}</b>}
             </div>
             <div className="today-chip">
               <CalendarDays size={17} />
@@ -1236,7 +1210,7 @@ export default function CenterApp() {
 
         <div className="page-content">
           {view === "dashboard" && <Dashboard sessions={sessions} teachers={teachers} onOpenSession={setSelectedSession} onViewAllSessions={() => navigate("sessions")} />}
-          {view === "students" && <StudentsPage tab={studentTab} setTab={setStudentTab} students={students} setStudents={setStudents} teachers={teachers} bookings={bookings} setBookings={setBookings} sessions={sessions} debtPayments={debtPayments} setDebtPayments={setDebtPayments} onOpenStudent={setSelectedStudent} audit={setAudit} showToast={showToast} />}
+          {view === "students" && <StudentsPage tab={studentTab} setTab={setStudentTab} students={students} setStudents={setStudents} teachers={teachers} bookings={bookings} setBookings={setBookings} sessions={sessions} setSessions={setSessions} debtPayments={debtPayments} setDebtPayments={setDebtPayments} onOpenStudent={setSelectedStudent} audit={setAudit} showToast={showToast} />}
           {view === "teachers" && <TeachersPage teachers={teachers} setTeachers={setTeachers} sessions={sessions} onOpenTeacher={setSelectedTeacher} audit={setAudit} subjectCatalog={subjectCatalog} setSubjectCatalog={setSubjectCatalog} showToast={showToast} />}
           {view === "sessions" && <SessionsPage sessions={sessions} teachers={teachers} onCreate={() => setCreateSessionOpen(true)} onOpen={setSelectedSession} />}
           {view === "expenses" && <ExpensesPage expenses={expenses} setExpenses={setExpenses} audit={setAudit} showToast={showToast} />}
@@ -1301,8 +1275,6 @@ export default function CenterApp() {
                   ...current,
                 ]);
               }}
-              onExportBackup={downloadServerBackup}
-              onCreateBackup={createServerBackup}
               showToast={showToast}
             />
           )}
@@ -1731,7 +1703,7 @@ export default function CenterApp() {
             <CloudOff size={23} />
             <span>
               <strong id="sync-conflict-title">يوجد تعارض في {cloudConflict.conflictPaths.length} جزء من البيانات</strong>
-              <small>{cloudConflict.message ?? "تم دمج التعديلات المختلفة تلقائياً، والنسختان المحلية والمركزية محفوظتان حتى تختار."}</small>
+              <small>{cloudConflict.message ?? "تم دمج التعديلات المختلفة تلقائياً، والنسختان المحلية والسحابية محفوظتان حتى تختار."}</small>
             </span>
           </div>
           <div>
@@ -1739,7 +1711,7 @@ export default function CenterApp() {
               تنزيل نسخة أمان
             </button>
             <button type="button" className="secondary-btn" onClick={() => void adoptCloudConflictCopy()}>
-              اعتماد نسخة SQLite
+              اعتماد السحابة
             </button>
             {!cloudConflict.conflictPaths.includes("server-validation") && (
               <button type="button" className="primary-btn" onClick={keepLocalConflictCopy}>
@@ -1964,10 +1936,12 @@ function Dashboard({ sessions, teachers, onOpenSession, onViewAllSessions }: { s
   );
 }
 
-function StudentsPage({ tab, setTab, students, setStudents, teachers, bookings, setBookings, sessions, debtPayments, setDebtPayments, onOpenStudent, audit, showToast }: { tab: StudentTab; setTab: (tab: StudentTab) => void; students: Student[]; setStudents: React.Dispatch<React.SetStateAction<Student[]>>; teachers: Teacher[]; bookings: Booking[]; setBookings: React.Dispatch<React.SetStateAction<Booking[]>>; sessions: LessonSession[]; debtPayments: DebtPayment[]; setDebtPayments: React.Dispatch<React.SetStateAction<DebtPayment[]>>; onOpenStudent: (student: Student) => void; audit: React.Dispatch<React.SetStateAction<AuditEntry[]>>; showToast: (message: string) => void }) {
+function StudentsPage({ tab, setTab, students, setStudents, teachers, bookings, setBookings, sessions, setSessions, debtPayments, setDebtPayments, onOpenStudent, audit, showToast }: { tab: StudentTab; setTab: (tab: StudentTab) => void; students: Student[]; setStudents: React.Dispatch<React.SetStateAction<Student[]>>; teachers: Teacher[]; bookings: Booking[]; setBookings: React.Dispatch<React.SetStateAction<Booking[]>>; sessions: LessonSession[]; setSessions: React.Dispatch<React.SetStateAction<LessonSession[]>>; debtPayments: DebtPayment[]; setDebtPayments: React.Dispatch<React.SetStateAction<DebtPayment[]>>; onOpenStudent: (student: Student) => void; audit: React.Dispatch<React.SetStateAction<AuditEntry[]>>; showToast: (message: string) => void }) {
   const [query, setQuery] = useState("");
   const [editStudent, setEditStudent] = useState<Student | null>(null);
   const [registeredStudent, setRegisteredStudent] = useState<Student | null>(null);
+  const [studentWhatsApp, setStudentWhatsApp] = useState<Student | null>(null);
+  const [deletingStudent, setDeletingStudent] = useState<Student | null>(null);
   const [settlingDebt, setSettlingDebt] = useState<{
     studentId: string;
     sessionId: string;
@@ -2323,24 +2297,19 @@ function StudentsPage({ tab, setTab, students, setStudents, teachers, bookings, 
                           <Edit3 size={17} />
                         </button>
                         <button
-                          className="archive-action"
-                          onClick={() => {
-                            setStudents((current) => current.map((item) => (item.id === student.id ? { ...item, active: false } : item)));
-                            audit((current) => [
-                              {
-                                id: String(Date.now()),
-                                action: "أرشفة طالب",
-                                details: `تمت أرشفة ${student.name} — ${student.id} مع الاحتفاظ بسجل حصصه وحساباته`,
-                                time: "الآن",
-                                tone: "orange",
-                              },
-                              ...current,
-                            ]);
-                            showToast("تم نقل الطالب للأرشيف");
-                          }}
-                          title="أرشفة"
+                          className="whatsapp-action"
+                          onClick={() => setStudentWhatsApp(student)}
+                          title="إرسال رسالة واتساب"
                         >
-                          <Archive size={17} />
+                          <MessageCircle size={17} />
+                        </button>
+                        <button
+                          className="archive-action"
+                          onClick={() => setDeletingStudent(student)}
+                          title="حذف الطالب نهائيًا"
+                          aria-label={`حذف الطالب ${student.name} نهائيًا`}
+                        >
+                          <Trash2 size={17} />
                         </button>
                       </div>
                     </td>
@@ -2427,6 +2396,66 @@ function StudentsPage({ tab, setTab, students, setStudents, teachers, bookings, 
           }}
           onClose={() => setRegisteredStudent(null)}
         />
+      )}
+      {studentWhatsApp && (
+        <WhatsAppShareModal
+          title="إرسال رسالة واتساب للطالب"
+          recipientName={studentWhatsApp.name}
+          initialPhone={studentWhatsApp.phone}
+          message={buildStudentChannelMessage()}
+          onSavePhone={(phone) => {
+            setStudents((current) => current.map((student) => (student.id === studentWhatsApp.id ? { ...student, phone } : student)));
+            setStudentWhatsApp((current) => (current ? { ...current, phone } : current));
+          }}
+          onClose={() => setStudentWhatsApp(null)}
+        />
+      )}
+      {deletingStudent && (
+        <Modal title="تأكيد حذف الطالب نهائيًا" subtitle={`${deletingStudent.name} — ${deletingStudent.id}`} onClose={() => setDeletingStudent(null)}>
+          <div className="modal-body entity-form">
+            <div className="delete-review full">
+              <Trash2 size={24} />
+              <div>
+                <strong>سيتم حذف الطالب بالكامل من قاعدة البيانات</strong>
+                <span>
+                  {bookings.filter((booking) => booking.studentId === deletingStudent.id).length} حجز · {sessions.reduce((count, lesson) => count + lesson.studentIds.filter((id) => id === deletingStudent.id).length, 0)} حضور · {debtPayments.filter((payment) => payment.studentId === deletingStudent.id).length} عملية سداد
+                </span>
+              </div>
+            </div>
+            <div className="form-error booking-delete-warning full">سيُحذف الطالب من الحصص ومدفوعاتها، وستتغير الحسابات التاريخية. لا يمكن التراجع بعد المزامنة.</div>
+            <div className="modal-actions full">
+              <button type="button" className="secondary-btn" onClick={() => setDeletingStudent(null)}>
+                إلغاء
+              </button>
+              <button
+                type="button"
+                className="danger-btn"
+                onClick={() => {
+                  const result = deleteStudentCompletely({ students, bookings, sessions, debtPayments }, deletingStudent.id);
+                  setStudents(result.state.students);
+                  setBookings(result.state.bookings);
+                  setDebtPayments(result.state.debtPayments);
+                  // Session attendance and payments are part of the same persisted snapshot.
+                  setSessions(result.state.sessions);
+                  audit((current) => [
+                    {
+                      id: String(Date.now()),
+                      action: "حذف طالب نهائيًا",
+                      details: `تم حذف ${deletingStudent.name} — ${deletingStudent.id} مع ${result.removed.bookings} حجز و${result.removed.attendanceRecords} حضور و${result.removed.debtPayments} عملية سداد`,
+                      time: "الآن",
+                      tone: "orange",
+                    },
+                    ...current,
+                  ]);
+                  setDeletingStudent(null);
+                  showToast("تم حذف الطالب وبياناته المرتبطة نهائيًا");
+                }}
+              >
+                <Trash2 size={17} /> حذف الطالب وبياناته
+              </button>
+            </div>
+          </div>
+        </Modal>
       )}
     </div>
   );
@@ -2760,7 +2789,7 @@ function BookingsPanel({ students, teachers, bookings, setBookings, audit, showT
                 </span>
               </div>
             </div>
-            <div className="form-error booking-delete-warning">لا يمكن التراجع عن الحذف بعد حفظه في قاعدة بيانات الجهاز.</div>
+            <div className="form-error booking-delete-warning">لا يمكن التراجع عن الحذف بعد مزامنته مع قاعدة البيانات.</div>
           </div>
           <div className="modal-actions">
             <button type="button" className="secondary-btn" onClick={() => setDeletingBooking(null)}>
@@ -4073,7 +4102,7 @@ function TeacherRecordModal({ teacher, sessions, students, debtPayments, onClose
   );
 }
 
-function AdminPage({ tab, setTab, pricing, setPricing, sessions, bookings, expenses, debtPayments, students, teachers, audit, setAudit, subjectCatalog, setSubjectCatalog, rooms, currentUsername, onCredentialsChanged, onRestoreTeacher, onAddRoom, onRenameRoom, onExportBackup, onCreateBackup, showToast }: { tab: AdminTab; setTab: (tab: AdminTab) => void; pricing: PriceRule[]; setPricing: React.Dispatch<React.SetStateAction<PriceRule[]>>; sessions: LessonSession[]; bookings: Booking[]; expenses: CenterExpense[]; debtPayments: DebtPayment[]; students: Student[]; teachers: Teacher[]; audit: AuditEntry[]; setAudit: React.Dispatch<React.SetStateAction<AuditEntry[]>>; subjectCatalog: Record<Stage, string[]>; setSubjectCatalog: React.Dispatch<React.SetStateAction<Record<Stage, string[]>>>; rooms: string[]; currentUsername: string; onCredentialsChanged: (username: string) => void; onRestoreTeacher: (teacher: Teacher) => void; onAddRoom: (room: string) => void; onRenameRoom: (index: number, room: string) => void; onExportBackup: () => void; onCreateBackup: () => void; showToast: (message: string) => void }) {
+function AdminPage({ tab, setTab, pricing, setPricing, sessions, bookings, expenses, debtPayments, students, teachers, audit, setAudit, subjectCatalog, setSubjectCatalog, rooms, currentUsername, onCredentialsChanged, onRestoreTeacher, onAddRoom, onRenameRoom, showToast }: { tab: AdminTab; setTab: (tab: AdminTab) => void; pricing: PriceRule[]; setPricing: React.Dispatch<React.SetStateAction<PriceRule[]>>; sessions: LessonSession[]; bookings: Booking[]; expenses: CenterExpense[]; debtPayments: DebtPayment[]; students: Student[]; teachers: Teacher[]; audit: AuditEntry[]; setAudit: React.Dispatch<React.SetStateAction<AuditEntry[]>>; subjectCatalog: Record<Stage, string[]>; setSubjectCatalog: React.Dispatch<React.SetStateAction<Record<Stage, string[]>>>; rooms: string[]; currentUsername: string; onCredentialsChanged: (username: string) => void; onRestoreTeacher: (teacher: Teacher) => void; onAddRoom: (room: string) => void; onRenameRoom: (index: number, room: string) => void; showToast: (message: string) => void }) {
   const tabs: { id: AdminTab; label: string; icon: typeof WalletCards }[] = [
     { id: "pricing", label: "أسعار الحصص", icon: WalletCards },
     { id: "archive", label: "أرشيف الحصص", icon: Archive },
@@ -4102,7 +4131,7 @@ function AdminPage({ tab, setTab, pricing, setPricing, sessions, bookings, expen
         {tab === "teacherArchive" && <TeacherArchivePanel teachers={teachers} sessions={sessions} onRestore={onRestoreTeacher} />}
         {tab === "analytics" && <AnalyticsPanel sessions={sessions} bookings={bookings} expenses={expenses} debtPayments={debtPayments} teachers={teachers} />}
         {tab === "audit" && <AuditPanel audit={audit} />}
-        {tab === "settings" && <SettingsPanel subjectCatalog={subjectCatalog} setSubjectCatalog={setSubjectCatalog} teachers={teachers} pricing={pricing} sessions={sessions} bookings={bookings} rooms={rooms} currentUsername={currentUsername} onCredentialsChanged={onCredentialsChanged} onAddRoom={onAddRoom} onRenameRoom={onRenameRoom} onExportBackup={onExportBackup} onCreateBackup={onCreateBackup} audit={setAudit} showToast={showToast} />}
+        {tab === "settings" && <SettingsPanel subjectCatalog={subjectCatalog} setSubjectCatalog={setSubjectCatalog} teachers={teachers} pricing={pricing} sessions={sessions} bookings={bookings} rooms={rooms} currentUsername={currentUsername} onCredentialsChanged={onCredentialsChanged} onAddRoom={onAddRoom} onRenameRoom={onRenameRoom} audit={setAudit} showToast={showToast} />}
       </section>
     </div>
   );
@@ -5430,7 +5459,7 @@ function AuditPanel({ audit }: { audit: AuditEntry[] }) {
   );
 }
 
-function SettingsPanel({ subjectCatalog, setSubjectCatalog, teachers, pricing, sessions, bookings, rooms, currentUsername, onCredentialsChanged, onAddRoom, onRenameRoom, onExportBackup, onCreateBackup, audit, showToast }: { subjectCatalog: Record<Stage, string[]>; setSubjectCatalog: React.Dispatch<React.SetStateAction<Record<Stage, string[]>>>; teachers: Teacher[]; pricing: PriceRule[]; sessions: LessonSession[]; bookings: Booking[]; rooms: string[]; currentUsername: string; onCredentialsChanged: (username: string) => void; onAddRoom: (room: string) => void; onRenameRoom: (index: number, room: string) => void; onExportBackup: () => void; onCreateBackup: () => void; audit: React.Dispatch<React.SetStateAction<AuditEntry[]>>; showToast: (message: string) => void }) {
+function SettingsPanel({ subjectCatalog, setSubjectCatalog, teachers, pricing, sessions, bookings, rooms, currentUsername, onCredentialsChanged, onAddRoom, onRenameRoom, audit, showToast }: { subjectCatalog: Record<Stage, string[]>; setSubjectCatalog: React.Dispatch<React.SetStateAction<Record<Stage, string[]>>>; teachers: Teacher[]; pricing: PriceRule[]; sessions: LessonSession[]; bookings: Booking[]; rooms: string[]; currentUsername: string; onCredentialsChanged: (username: string) => void; onAddRoom: (room: string) => void; onRenameRoom: (index: number, room: string) => void; audit: React.Dispatch<React.SetStateAction<AuditEntry[]>>; showToast: (message: string) => void }) {
   const [username, setUsername] = useState(currentUsername);
   const [credentialsSaving, setCredentialsSaving] = useState(false);
   const [recoveryCode, setRecoveryCode] = useState("");
@@ -5714,20 +5743,12 @@ function SettingsPanel({ subjectCatalog, setSubjectCatalog, teachers, pricing, s
         </div>
       </section>
         <section className="cloud-card">
-        <Database size={26} />
+        <ShieldCheck size={26} />
         <div>
-          <h3>قاعدة بيانات SQLite المحلية</h3>
-          <p>كمبيوتر السنتر هو مصدر البيانات المركزي. كل الأجهزة على شبكة السنتر تحفظ في ملف SQLite واحد، ويستمر العمل بدون إنترنت.</p>
-          <div className="backup-actions">
-            <button type="button" className="secondary-btn" onClick={onExportBackup}>
-              <Download size={17} /> تصدير نسخة JSON
-            </button>
-            <button type="button" className="primary-btn" onClick={onCreateBackup}>
-              <ShieldCheck size={17} /> إنشاء نسخة SQLite
-            </button>
-          </div>
+          <h3>قاعدة البيانات السحابية</h3>
+          <p>كل تغيير يُحفظ فوراً في قاعدة IndexedDB على الجهاز مع سجل عمليات، ثم يُزامن تلقائياً مع Supabase PostgreSQL عند توفر الإنترنت.</p>
         </div>
-        <span>Local Server</span>
+        <span>حفظ مزدوج آمن</span>
         </section>
       </div>
       {deletingSubject && (

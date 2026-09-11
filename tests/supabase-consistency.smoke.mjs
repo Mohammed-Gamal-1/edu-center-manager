@@ -14,11 +14,21 @@ const headers = secret.startsWith("sb_secret_")
   ? { apikey: secret }
   : { apikey: secret, Authorization: `Bearer ${secret}` };
 
-async function request(path) {
-  const response = await fetch(`${baseUrl}/${path}`, { headers });
+async function request(path, range) {
+  const response = await fetch(`${baseUrl}/${path}`, { headers: range ? { ...headers, Range: range } : headers });
   const text = await response.text();
   if (!response.ok) throw new Error(`Supabase ${response.status}: ${text.slice(0, 500)}`);
   return text ? JSON.parse(text) : null;
+}
+
+async function requestAll(path) {
+  const rows = [];
+  const pageSize = 1000;
+  for (let offset = 0; ; offset += pageSize) {
+    const page = await request(path, `${offset}-${offset + pageSize - 1}`);
+    rows.push(...page);
+    if (page.length < pageSize) return rows;
+  }
 }
 
 function ids(rows) {
@@ -33,15 +43,15 @@ function snapshotIds(rows) {
 
 const [stateRows, students, teachers, sessions, bookings, expenses, debtPayments, attendance, rooms, prices] = await Promise.all([
   request("center_state?id=eq.1&select=data,version,updated_at"),
-  request("students?select=id"),
-  request("teachers?select=id"),
-  request("lesson_sessions?select=id,status"),
-  request("advance_bookings?select=id"),
-  request("center_expenses?select=id"),
-  request("student_debt_payments?select=id"),
-  request("session_attendance?select=session_id,student_id"),
-  request("rooms?active=eq.true&select=name"),
-  request("price_rules?active=eq.true&select=id,teacher_id"),
+  requestAll("students?select=id"),
+  requestAll("teachers?select=id"),
+  requestAll("lesson_sessions?select=id,status"),
+  requestAll("advance_bookings?select=id"),
+  requestAll("center_expenses?select=id"),
+  requestAll("student_debt_payments?select=id"),
+  requestAll("session_attendance?select=session_id,student_id"),
+  requestAll("rooms?active=eq.true&select=name"),
+  requestAll("price_rules?active=eq.true&select=id,teacher_id"),
 ]);
 
 assert.equal(stateRows.length, 1, "one authoritative center_state row must exist");

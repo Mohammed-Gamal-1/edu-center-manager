@@ -43,5 +43,5 @@ next-env.d.ts
 /work/
 *.tsbuildinfo
 
-# Local Center SQLite data and backups
+# Never commit local database exports or recovery files.
 /data/

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { emptyCenterState, findActiveStudentStateConflict, findCenterStateBusinessConflict, findSubjectCatalogDeletionConflict, findSubjectUsageConflict, removeBookingById, removedSubjectCatalogEntries, type CenterStatePayload } from "../lib/center-state.ts";
+import { deleteStudentCompletely, emptyCenterState, findActiveStudentStateConflict, findCenterStateBusinessConflict, findSubjectCatalogDeletionConflict, findSubjectUsageConflict, removeBookingById, removedSubjectCatalogEntries, type CenterStatePayload } from "../lib/center-state.ts";
 
 const isStringArray = (value: unknown): value is string[] => Array.isArray(value) && value.every((item) => typeof item === "string");
 
@@ -127,6 +127,47 @@ test("permanently removes only the selected advance booking", () => {
   ];
   assert.deepEqual(removeBookingById(bookings, "1"), [{ id: "2", bookingFee: 20 }]);
   assert.deepEqual(removeBookingById(bookings, "missing"), bookings);
+});
+
+test("permanently deletes a student and every financial or attendance reference", () => {
+  const result = deleteStudentCompletely(
+    {
+      students: [
+        { id: "101001", name: "أحمد" },
+        { id: "101002", name: "منى" },
+      ],
+      bookings: [
+        { id: "1", studentId: "101001" },
+        { id: "2", studentId: "101002" },
+      ],
+      sessions: [
+        { id: "10", studentIds: ["101001", "101002"], studentPayments: { "101001": 15, "101002": 20 } },
+        { id: "11", studentIds: ["101002"], studentPayments: { "101002": 25 } },
+      ],
+      debtPayments: [
+        { id: "20", studentId: "101001" },
+        { id: "21", studentId: "101002" },
+      ],
+    },
+    "101001",
+  );
+
+  assert.deepEqual(result.state.students, [{ id: "101002", name: "منى" }]);
+  assert.deepEqual(result.state.bookings, [{ id: "2", studentId: "101002" }]);
+  assert.deepEqual(result.state.debtPayments, [{ id: "21", studentId: "101002" }]);
+  assert.deepEqual(result.state.sessions, [
+    { id: "10", studentIds: ["101002"], studentPayments: { "101002": 20 } },
+    { id: "11", studentIds: ["101002"], studentPayments: { "101002": 25 } },
+  ]);
+  assert.deepEqual(result.removed, { students: 1, bookings: 1, attendanceRecords: 1, debtPayments: 1 });
+});
+
+test("rejects snapshots containing references to a student that no longer exists", () => {
+  const conflict = findCenterStateBusinessConflict({
+    ...emptyCenterState,
+    sessions: [{ id: "10", status: "ended", studentIds: ["101999"], studentPayments: { "101999": 15 } }],
+  });
+  assert.equal(conflict?.kind, "missing-student-reference");
 });
 
 test("detects only subjects removed from their matching stage", () => {

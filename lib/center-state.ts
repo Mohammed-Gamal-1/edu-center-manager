@@ -36,6 +36,51 @@ export function removeBookingById<T extends { id: string }>(bookings: T[], booki
   return bookings.filter((booking) => booking.id !== bookingId);
 }
 
+type StudentDeletionState<
+  Student extends { id: string },
+  Booking extends { studentId: string },
+  Session extends { id?: string; studentIds: string[]; studentPayments?: Record<string, number> },
+  DebtPayment extends { studentId: string },
+> = {
+  students: Student[];
+  bookings: Booking[];
+  sessions: Session[];
+  debtPayments: DebtPayment[];
+};
+
+export function deleteStudentCompletely<
+  Student extends { id: string },
+  Booking extends { studentId: string },
+  Session extends { id?: string; studentIds: string[]; studentPayments?: Record<string, number> },
+  DebtPayment extends { studentId: string },
+>(state: StudentDeletionState<Student, Booking, Session, DebtPayment>, studentId: string) {
+  let attendanceRecords = 0;
+  const sessions = state.sessions.map((session) => {
+    if (!session.studentIds.includes(studentId) && !Object.hasOwn(session.studentPayments ?? {}, studentId)) return session;
+    attendanceRecords += session.studentIds.filter((id) => id === studentId).length;
+    const studentPayments = { ...(session.studentPayments ?? {}) };
+    delete studentPayments[studentId];
+    return {
+      ...session,
+      studentIds: session.studentIds.filter((id) => id !== studentId),
+      ...(session.studentPayments === undefined && Object.keys(studentPayments).length === 0 ? {} : { studentPayments }),
+    };
+  });
+  const students = state.students.filter((student) => student.id !== studentId);
+  const bookings = state.bookings.filter((booking) => booking.studentId !== studentId);
+  const debtPayments = state.debtPayments.filter((payment) => payment.studentId !== studentId);
+
+  return {
+    state: { ...state, students, bookings, sessions, debtPayments },
+    removed: {
+      students: state.students.length - students.length,
+      bookings: state.bookings.length - bookings.length,
+      attendanceRecords,
+      debtPayments: state.debtPayments.length - debtPayments.length,
+    },
+  };
+}
+
 export function isCenterStatePayload(value: unknown): value is CenterStatePayload {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const payload = value as Record<string, unknown>;
@@ -191,7 +236,7 @@ export function findActiveStudentStateConflict(state: CenterStatePayload) {
 }
 
 export type CenterStateBusinessConflict = {
-  kind: "duplicate-id" | "duplicate-price" | "invalid-price" | "duplicate-booking" | "invalid-booking" | "duplicate-room" | "room-schedule" | "room-active";
+  kind: "duplicate-id" | "duplicate-price" | "invalid-price" | "duplicate-booking" | "invalid-booking" | "missing-student-reference" | "duplicate-room" | "room-schedule" | "room-active";
   message: string;
 };
 
@@ -257,6 +302,23 @@ export function findCenterStateBusinessConflict(state: CenterStatePayload): Cent
     const key = [rawBooking.studentId, rawBooking.teacherId, rawBooking.stage, rawBooking.grade, rawBooking.subject].map((value) => String(value ?? "").trim().toLocaleLowerCase("ar")).join("\u0000");
     if (bookingKeys.has(key)) return { kind: "duplicate-booking", message: "يوجد حجز مكرر لنفس الطالب والمدرس والمادة" };
     bookingKeys.add(key);
+  }
+
+  const studentIds = new Set(state.students.filter(isRecord).map((student) => String(student.id ?? "")));
+  for (const rawSession of state.sessions) {
+    if (!isRecord(rawSession) || !Array.isArray(rawSession.studentIds)) continue;
+    const missingStudentId = rawSession.studentIds.map(String).find((studentId) => !studentIds.has(studentId));
+    if (missingStudentId) return { kind: "missing-student-reference", message: `الحصة ${String(rawSession.id ?? "")} تشير إلى طالب غير موجود: ${missingStudentId}` };
+  }
+  for (const rawBooking of state.bookings) {
+    if (isRecord(rawBooking) && !studentIds.has(String(rawBooking.studentId ?? ""))) {
+      return { kind: "missing-student-reference", message: `الحجز ${String(rawBooking.id ?? "")} يشير إلى طالب غير موجود` };
+    }
+  }
+  for (const rawPayment of state.debtPayments ?? []) {
+    if (isRecord(rawPayment) && !studentIds.has(String(rawPayment.studentId ?? ""))) {
+      return { kind: "missing-student-reference", message: `سداد المديونية ${String(rawPayment.id ?? "")} يشير إلى طالب غير موجود` };
+    }
   }
 
   const activeRooms = new Map<string, string>();

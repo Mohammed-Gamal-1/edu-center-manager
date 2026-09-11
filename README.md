@@ -1,23 +1,17 @@
-# سنتر التفوق — Local Server + SQLite
+# سنتر التفوق — نظام الإدارة السحابي
 
-التشغيل الأساسي لهذا المشروع أصبح محليًا بدون إنترنت: كمبيوتر السنتر يشغّل السيرفر ويحفظ البيانات في SQLite، وباقي الأجهزة تتصل به عبر شبكة الـWi-Fi المحلية.
+رابط التشغيل المعتمد: https://center-plus-management.jmika.chatgpt.site/
 
-راجع [دليل الإعداد والتشغيل المحلي](./LOCAL-SERVER.md) قبل نقل البيانات أو تشغيل النظام في السنتر.
+البيانات تُحفظ في Supabase PostgreSQL، مع نسخة محلية مؤقتة في المتصفح لحماية التعديلات عند انقطاع الإنترنت وإعادة مزامنتها تلقائيًا عند عودة الاتصال.
 
 ## أوامر المشروع
 
+- `npm run dev`: تشغيل بيئة التطوير.
 - `npm run build`: بناء نسخة التشغيل.
-- `npm run local:setup -- --username admin`: إعداد حساب الإدارة (مرّر PIN في متغير `LOCAL_ADMIN_PIN`).
-- `npm run local:start`: تشغيل السيرفر المحلي.
-- `npm run local:import -- file.json --inspect`: فحص ملف استرجاع دون تعديل البيانات.
-- `npm run local:import-supabase`: قراءة Supabase ونسخها إلى SQLite لمرة واحدة.
-- `npm run local:verify-supabase`: مقارنة حالة SQLite بحالة Supabase بدون تعديل أي منهما.
-- `npm run local:backup`: إنشاء ملف SQLite متسق صالح للنقل أو الأرشفة.
-- `npm test`: بناء المشروع واختبار SQLite والسيرفر المحلي والتعارض والنسخ الاحتياطي.
+- `npm test`: بناء المشروع وتشغيل اختبارات الحفظ والحذف ورسائل واتساب.
+- `npm run lint`: فحص جودة الكود.
 
-## معلومات القالب الأصلي
-
-# vinext-starter
+## معلومات القالب
 
 A clean full-stack starter running on
 [vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and
