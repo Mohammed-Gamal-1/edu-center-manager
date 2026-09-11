@@ -9,7 +9,7 @@
     "dev": "vinext dev",
     "build": "vinext build",
     "start": "vinext start",
-    "test": "npm run build && node --test tests/rendered-html.test.mjs tests/center-state.test.ts tests/whatsapp.test.ts",
+    "test": "npm run build && node --test tests/rendered-html.test.mjs tests/center-state.test.ts tests/service-worker-cleanup.test.ts tests/whatsapp.test.ts",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next"
   },
   "dependencies": {
